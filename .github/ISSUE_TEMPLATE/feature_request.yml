@@ -1,0 +1,38 @@
+name: Feature request
+description: Propose a board, a workflow, or an engineering improvement
+title: "[Feature]: "
+labels: ["enhancement", "triage"]
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: User problem
+      description: Describe the workflow or limitation without assuming an implementation.
+    validations:
+      required: true
+  - type: textarea
+    id: scope
+    attributes:
+      label: Machines, ROMs, chips and programmers
+    validations:
+      required: true
+  - type: textarea
+    id: outcome
+    attributes:
+      label: Expected outcome and safe failure behaviour
+    validations:
+      required: true
+  - type: textarea
+    id: evidence
+    attributes:
+      label: Technical references
+      description: For a new board, link the schematic or data sheet that gives the socket pinout and the ROM layout. Do not upload ROM images.
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: Submission checks
+      options:
+        - label: I searched existing issues and documentation.
+          required: true
+        - label: I identified any operation that could overwrite a chip or apply a programming voltage.
+          required: true

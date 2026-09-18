@@ -1,0 +1,19 @@
+# ROM images belong to whoever licensed them, not in this repository. The
+# tests and the screenshots use the synthetic images in t48_programmer.samples.
+*.rom
+*.bin
+*.img
+
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+build/
+dist/
+*.deb
+.venv/
+venv/
+*~
+.kilo/

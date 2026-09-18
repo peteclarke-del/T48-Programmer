@@ -1,0 +1,61 @@
+name: Bug report
+description: Report reproducible behaviour that differs from the documentation
+title: "[Bug]: "
+labels: ["bug", "triage"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Do not attach ROM images, a rom.key, private paths, or secrets. Follow SECURITY.md for vulnerabilities.
+  - type: input
+    id: version
+    attributes:
+      label: Version or commit
+    validations:
+      required: true
+  - type: input
+    id: host
+    attributes:
+      label: Linux distribution and GNOME version
+    validations:
+      required: true
+  - type: input
+    id: hardware
+    attributes:
+      label: Programmer, firmware, and minipro version
+      description: Help, About shows all three under Troubleshooting.
+  - type: input
+    id: chip
+    attributes:
+      label: Chip, as named in the application, and the operation
+  - type: textarea
+    id: steps
+    attributes:
+      label: Reproduction
+      description: Give the smallest exact sequence. Say whether it also happens with T48_PROGRAMMER_DEMO=1.
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected result
+    validations:
+      required: true
+  - type: textarea
+    id: actual
+    attributes:
+      label: Actual result and the Diagnostic Log
+      description: Help, Diagnostic Log holds the exact output of minipro. Remove private paths first.
+    validations:
+      required: true
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: Submission checks
+      options:
+        - label: I searched existing issues and current documentation.
+          required: true
+        - label: This report contains no secrets and no ROM image or key.
+          required: true
+        - label: This is not a privately reportable security vulnerability.
+          required: true

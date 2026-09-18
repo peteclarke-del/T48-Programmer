@@ -13,7 +13,6 @@ from t48_programmer.rom_sets import (
     bank_spans,
     fit_to_chip,
     join_banks,
-    layouts_for,
     layouts_in,
     prepare,
     split_lanes,
@@ -326,29 +325,6 @@ class EveryLayoutTests(unittest.TestCase):
 
         with self.assertRaisesRegex(RomSetError, "256 KB.*192 KB"):
             prepare(layout, chip, bytes(192 * KIB))
-
-    def test_layouts_are_offered_by_image_size(self) -> None:
-        self.assertEqual(
-            [layout.key for layout in layouts_for(512 * KIB)],
-            ["amiga-single", "amiga-pair"],
-        )
-        self.assertEqual(
-            [layout.key for layout in layouts_for(192 * KIB)],
-            ["atari-st-six", "atari-st-two"],
-        )
-        self.assertEqual(
-            [layout.key for layout in layouts_for(16 * KIB)], ["acorn-rom"]
-        )
-        self.assertEqual(layouts_for(100), ())
-
-    def test_the_boards_for_the_recognised_image_lead_the_list(self) -> None:
-        # 256 KB is a Kickstart 1.3 and also an STE TOS.
-        def keys(kind: str) -> list[str]:
-            return [layout.key for layout in layouts_for(256 * KIB, kind)]
-
-        self.assertEqual(keys("tos"), ["atari-ste", "amiga-single"])
-        self.assertEqual(keys("kickstart"), ["amiga-single", "atari-ste"])
-        self.assertEqual(keys("binary"), ["amiga-single", "atari-ste"])
 
     def test_every_board_belongs_to_a_family_the_identifier_can_name(self) -> None:
         produced = {

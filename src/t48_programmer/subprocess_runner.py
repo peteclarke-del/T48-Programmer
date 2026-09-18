@@ -14,6 +14,9 @@ from .operation import OperationController
 # escape, and rings the terminal bell on an overcurrent trip. None of that
 # belongs in a label or a log.
 _TERMINAL_NOISE = re.compile(r"\x1b\[[0-9;]*[A-Za-z]|\x07")
+# No line of minipro's is a tenth of this. A longer one is cut, so that a
+# runaway process cannot grow a label or the diagnostic log without limit.
+MAX_LINE_LENGTH = 2048
 
 
 @dataclass(frozen=True, slots=True)
@@ -26,7 +29,7 @@ class StreamingProcessResult:
 
 def clean_line(raw_line: str) -> str:
     """Remove terminal control sequences and surrounding whitespace."""
-    return _TERMINAL_NOISE.sub("", raw_line).strip()
+    return _TERMINAL_NOISE.sub("", raw_line[:MAX_LINE_LENGTH]).strip()
 
 
 def run_streaming_process(
@@ -91,9 +94,10 @@ def run_streaming_process(
         if controller is not None:
             controller.unregister(process)
 
+    # A cancel that arrives as minipro finishes did not stop anything. The chip
+    # was written and verified, and saying "cancelled" would send the user off
+    # to erase a good chip.
+    cancelled = controller is not None and controller.cancelled and return_code != 0
     return StreamingProcessResult(
-        return_code,
-        "\n".join(output_lines),
-        timed_out.is_set(),
-        controller.cancelled if controller is not None else False,
+        return_code, "\n".join(output_lines), timed_out.is_set(), cancelled
     )

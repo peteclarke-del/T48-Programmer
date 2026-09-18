@@ -20,11 +20,11 @@ import gi
 
 gi.require_version("Gtk", "4.0")
 gi.require_version("Adw", "1")
-from gi.repository import Adw, Gdk, Gio, GObject, Gtk  # noqa: E402
+from gi.repository import Adw, Gdk, GObject, Gtk  # noqa: E402
 
 from .main_loop import call_on_main_loop  # noqa: E402
 from .operations import OperationResult  # noqa: E402
-from .rom_image import OpenedRom, fingerprint, identify, size_text  # noqa: E402
+from .rom_image import OpenedRom, crc32_text, identify, size_text  # noqa: E402
 from .rom_sets import (  # noqa: E402
     FAMILIES,
     ChipOption,
@@ -36,6 +36,7 @@ from .rom_sets import (  # noqa: E402
     join_banks,
     layouts_in,
     prepare,
+    sizes_text,
 )
 
 STEPS = ("ROM", "Machine", "Chip", "Images", "Burn")
@@ -101,10 +102,17 @@ def _text_row(text: str) -> Adw.ActionRow:
 class RomWizard(Gtk.Box):
     """Breadcrumbs, one page for the current step, and Back and Next."""
 
-    def __init__(self, host: WizardHost, write_action: Gio.Action) -> None:
+    def __init__(self, host: WizardHost, *, can_burn: bool) -> None:
         super().__init__(orientation=Gtk.Orientation.VERTICAL)
         self._host = host
-        self._write_action = write_action
+        # Whether a programmer is there to burn with. The window says so, here
+        # and through set_can_burn. The guide does not listen to the window's
+        # actions itself: a new guide is made each time it is opened, and one
+        # that had connected to a signal of the window's would never be freed,
+        # along with every image it had been given.
+        self._can_burn = can_burn
+        self.burn_buttons: list[Gtk.Button] = []
+        self.checksums: list[str] = []
         self.answers = Answers()
         self.step = ROM
         self.parts: tuple[RomPart, ...] = ()
@@ -140,8 +148,6 @@ class RomWizard(Gtk.Box):
         self.next_button.connect("clicked", lambda _button: self._next_pressed())
         bar.append(self.next_button)
         self.append(bar)
-        # The burn button comes and goes with the programmer.
-        write_action.connect("notify::enabled", lambda *_args: self._refresh_chrome())
         self.go_to(ROM)
 
     # Navigation
@@ -150,12 +156,39 @@ class RomWizard(Gtk.Box):
         """A step can be visited once every step before it has an answer."""
         return all(self.answers.answered(earlier) for earlier in range(step))
 
-    def go_to(self, step: int) -> None:
+    def release(self) -> None:
+        """Give up everything held, when the window replaces this guide.
+
+        PyGObject cannot free a widget whose own signal handlers refer back to
+        it, because the cycle passes through GTK where Python's collector
+        cannot follow. A replaced guide therefore stays in memory as an empty
+        shell. What must not stay with it is what it was given: the images,
+        the prepared chips, and the page that shows them.
+        """
+        self.answers = Answers()
+        self.parts, self.status, self.checksums = (), [], []
+        self.burn_buttons = []
+        self._page_holder.set_child(None)
+
+    def set_can_burn(self, can_burn: bool) -> None:
+        """Told by the window when the programmer comes or goes."""
+        self._can_burn = can_burn
+        for button in self.burn_buttons:
+            button.set_sensitive(can_burn)
+        self._refresh_chrome()
+
+    def go_to(self, step: int, problem: str = "") -> None:
+        """Show a step, with a word of explanation if something was refused.
+
+        This is the only place the message is set, so one from an earlier step
+        cannot linger on a page it has nothing to do with.
+        """
         if not 0 <= step < len(STEPS) or not self.reachable(step):
             return
         self.step = step
+        self.problem = problem
         if step == BURN:
-            self._prepare_parts()
+            self.problem = self._prepare_parts()
         builders = (
             self._build_rom_page,
             self._build_machine_page,
@@ -195,7 +228,7 @@ class RomWizard(Gtk.Box):
         self.next_button.set_label(
             "Burn and Verify" if len(self.parts) == 1 else f"Burn {label} and Verify"
         )
-        self.next_button.set_sensitive(self._write_action.get_enabled())
+        self.next_button.set_sensitive(self._can_burn)
 
     def _next_pressed(self) -> None:
         if self.step < BURN:
@@ -219,8 +252,14 @@ class RomWizard(Gtk.Box):
 
     def choose_chip(self, option: ChipOption) -> None:
         self.answers.option = option
-        self._trim_images()
-        self.go_to(IMAGES)
+        dropped = self._trim_images()
+        self.go_to(
+            IMAGES,
+            f"{', '.join(dropped)} will not fit this chip and "
+            f"{'was' if len(dropped) == 1 else 'were'} removed."
+            if dropped
+            else "",
+        )
 
     def use_other_chip(self, device: str, chip_bytes: int) -> None:
         """Take a chip from the full search, if the board can use its size."""
@@ -230,29 +269,46 @@ class RomWizard(Gtk.Box):
             layout.bank_bytes and chip_bytes and chip_bytes % layout.bank_bytes == 0
         )
         if not fits:
-            wanted = " or ".join(size_text(size) for size in sorted(sizes))
-            self.problem = (
+            self.go_to(
+                CHIP,
                 f"{device} holds {size_text(chip_bytes)}. This board needs a chip "
-                f"of {wanted}."
+                f"of {sizes_text(sizes)}.",
             )
-            self.go_to(CHIP)
             return
-        self.problem = ""
         self.choose_chip(ChipOption(device, chip_bytes, "Chosen from the full list"))
 
     def add_image(self, opened: OpenedRom) -> None:
         if opened.data is None:
-            self.problem = f"{opened.path.name} is too large to be a ROM image."
+            problem = f"{opened.path.name} is too large to be a ROM image."
         elif opened.identity.kind == "kickstart-swapped":
             # The guide would swap it again and burn a chip that reads wrong.
-            self.problem = f"{opened.path.name}: {opened.identity.warnings[-1]}"
+            problem = f"{opened.path.name}: {opened.identity.warnings[-1]}"
         else:
-            self.problem = ""
-            if self.bank_count() == 1:
-                self.answers.images.clear()
-            self.answers.images.append(opened)
-            self._trim_images()
-        self.go_to(IMAGES)
+            # A chip with one bank holds one image, so a new one replaces it.
+            kept = [] if self.bank_count() == 1 else self.answers.images
+            problem = self._why_it_will_not_fit(kept, opened)
+            if not problem:
+                self.answers.images = [*kept, opened]
+        self.go_to(IMAGES, problem)
+
+    def _why_it_will_not_fit(self, kept: list[OpenedRom], new: OpenedRom) -> str:
+        """The reason an image cannot join the others, or "" when it can.
+
+        Said here, when the file is chosen. Leaving the image out without a
+        word would look as though choosing a file did nothing.
+        """
+        sizes = [rom.byte_count for rom in (*kept, new)]
+        spans = bank_spans(self.answers.layout, self.answers.option, sizes)
+        first, count = spans[-1]
+        if first + count <= self.bank_count():
+            return ""
+        bank = self.answers.layout.bank_size(self.answers.option)
+        free = (self.bank_count() - first) * bank
+        room = f"room for {size_text(free)} more" if free > 0 else "no room left"
+        return (
+            f"{new.path.name} is {size_text(new.byte_count)}, and there is {room} "
+            f"in this {size_text(self.answers.option.chip_bytes)} chip."
+        )
 
     def remove_image(self, index: int) -> None:
         del self.answers.images[index]
@@ -286,14 +342,17 @@ class RomWizard(Gtk.Box):
     def bank_count(self) -> int:
         return self.answers.layout.bank_count(self.answers.option)
 
-    def _trim_images(self) -> None:
-        """Drop images from the end until what is left fits the chip."""
+    def _trim_images(self) -> list[str]:
+        """Drop images from the end until the rest fit, and name those dropped."""
+        dropped = []
         while self.answers.images and self.banks_used() > self.bank_count():
-            self.answers.images.pop()
+            dropped.insert(0, self.answers.images.pop().path.name)
+        return dropped
 
     # Preparing and burning
 
-    def _prepare_parts(self) -> None:
+    def _prepare_parts(self) -> str:
+        """Work out the chips to burn. Returns why not, when it cannot be done."""
         answers = self.answers
         try:
             data = join_banks(
@@ -301,12 +360,16 @@ class RomWizard(Gtk.Box):
             )
             parts = prepare(answers.layout, answers.option, data)
         except RomSetError as error:
-            parts, self.problem = (), str(error)
+            parts, problem = (), str(error)
         else:
-            self.problem = ""
+            problem = ""
         if parts != self.parts:
             self.parts = parts
             self.status = [WAITING] * len(parts)
+            # Once, here. The page is rebuilt after every burn, and hashing
+            # each part again every time would be work for nothing.
+            self.checksums = [crc32_text(part.data) for part in parts]
+        return problem
 
     def next_pending(self) -> int | None:
         return next(
@@ -424,7 +487,7 @@ class RomWizard(Gtk.Box):
 
     def _build_images_page(self) -> Gtk.Widget:
         layout, banks = self.answers.layout, self.bank_count()
-        sizes = " or ".join(size_text(size) for size in layout.image_sizes)
+        sizes = sizes_text(layout.image_sizes)
         if banks > 1:
             description = (
                 f"This chip holds up to {banks} images of "
@@ -563,28 +626,23 @@ class RomWizard(Gtk.Box):
             "clicked", lambda _b: self._host.save_parts(self.parts, answers.stem)
         )
         chips.set_header_suffix(save)
-        self.burn_buttons: list[Gtk.Button] = []
+        self.burn_buttons = []
         for index, part in enumerate(self.parts):
-            checksums = dict(fingerprint(part.data))
             row = _row(
                 f"{part.label} for {part.device}",
-                f"{size_text(len(part.data))}, CRC-32 {checksums['CRC-32']}. "
+                f"{size_text(len(part.data))}, CRC-32 {self.checksums[index]}. "
                 f"{self.status[index]}",
                 activatable=False,
             )
             if self.status[index] == WRITTEN:
                 row.add_prefix(Gtk.Image(icon_name="object-select-symbolic"))
+            # Burning needs a programmer. Offline, Save All Parts is the way out.
             burn = Gtk.Button(
                 label="Burn Again…" if self.status[index] == WRITTEN else "Burn…",
                 valign=Gtk.Align.CENTER,
+                sensitive=self._can_burn,
             )
             burn.connect("clicked", lambda _b, index=index: self.burn(index))
-            # Follows the window's write command, so that burning is possible
-            # only while a programmer is connected. Offline, Save All Parts is
-            # the way out.
-            self._write_action.bind_property(
-                "enabled", burn, "sensitive", GObject.BindingFlags.SYNC_CREATE
-            )
             row.add_suffix(burn)
             self.burn_buttons.append(burn)
             chips.add(row)

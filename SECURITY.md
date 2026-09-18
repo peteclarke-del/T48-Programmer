@@ -43,17 +43,31 @@ bounty.
   accept is downloaded from GitHub, checked against the SHA256SUMS published
   with the release, and installed by apt after the system asks for your
   password. A package that does not match is deleted. Nothing is sent when the
-  application starts, and no ROM image is ever downloaded or uploaded.
+  application starts, and no ROM image is ever downloaded or uploaded. See
+  Installing an update, below, for how the package is protected on its way in.
 - It needs no privileges of its own. Installing an update is done by
   `pkexec apt-get`, which asks for your password each time. Access to the programmer comes from a udev rule that
   grants it to the user logged in at the machine. Do not run it with sudo.
 
 ## Trust boundaries
 
-ROM images and minipro's output are treated as untrusted input. Image
-identification reads fixed offsets with bounds checks and never executes or
-unpacks anything. Files larger than 64 MB are passed to minipro without being
-read into memory.
+ROM images, keys and minipro's output are treated as untrusted input.
+
+- Image identification reads fixed offsets with bounds checks and never
+  executes or unpacks anything. Only a regular file is opened. A FIFO or a
+  device, which reports no size and never stops giving bytes, is refused, and
+  every read stops at a limit of its own instead of trusting the size the file
+  system reported: 64 MB for an image and 64 KB for a key. The Kickstart
+  checksum and decryption are attempted only on files of 2 MB or less.
+- minipro is given the path of the image and reads the file itself. If the
+  file has changed since it was opened, the application reads it again and
+  does not write, so what is burned is what was identified and confirmed.
+- minipro's output is parsed with string operations and with regular
+  expressions that cannot backtrack badly, and each line is cut at 2 KB. A
+  listing is taken from standard output alone and only when minipro succeeds,
+  so an error message cannot become the name of a chip.
+- The worker that runs minipro never raises. Whatever happens, the window is
+  told that the operation is over, so it cannot be left refusing every command.
 
 `T48_PROGRAMMER_MINIPRO` names the program that will be run with your
 privileges and access to the programmer. Anyone who can set your environment
@@ -62,6 +76,27 @@ at a binary you did not build or install.
 
 The Debian package compiles minipro from a release archive pinned by SHA-256 in
 `packaging/minipro-source.sha256`. A changed archive fails the build.
+
+## Installing an update
+
+The package is downloaded to your cache folder and checked against the
+release's `SHA256SUMS`. That check is made as you, in a folder you can write
+to, and the password prompt can then stay open for any length of time. A
+program running as you could replace the file in that gap, and its maintainer
+scripts would run as root on the strength of a password given for something
+else.
+
+So the check that counts is made as root. pkexec runs
+`/usr/lib/t48-programmer/bin/install-update`, which the package installs and
+only root can change, with the package's path and the checksum it must have.
+The helper copies the package into a folder only root can write to, hashes the
+copy, refuses it if the checksum differs, and gives the copy to apt. The file
+that was checked is the file that is installed.
+
+The simulator used by the demonstration mode keeps its imaginary chips in a
+private folder under your runtime directory, and refuses a folder that is not
+yours, so that another user of the machine cannot leave a link there for a
+write to follow.
 
 ## Hardware safety
 

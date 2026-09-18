@@ -25,7 +25,6 @@ class ChipChooser(Adw.Window):
         parent: Gtk.Window,
         catalogue: tuple[str, ...],
         on_chosen: Callable[[str], None],
-        initial_text: str = "",
     ) -> None:
         super().__init__(
             transient_for=parent,
@@ -77,23 +76,20 @@ class ChipChooser(Adw.Window):
         self._count.add_css_class("dim-label")
         page.append(self._count)
 
-        self.search_entry.set_text(initial_text)
         self._search_changed(self.search_entry)
 
     def _search_changed(self, entry: Gtk.SearchEntry) -> None:
-        text = entry.get_text()
-        matches = search(self._catalogue, text, limit=len(self._catalogue))
-        shown = matches[:VISIBLE_LIMIT]
+        shown, total = search(self._catalogue, entry.get_text(), VISIBLE_LIMIT)
         self.names.splice(0, self.names.get_n_items(), shown)
         if not self._catalogue:
             self._count.set_text("minipro listed no chips.")
-        elif len(matches) > len(shown):
+        elif total > len(shown):
             self._count.set_text(
-                f"Showing the first {len(shown):,} of {len(matches):,} matches. "
+                f"Showing the first {len(shown):,} of {total:,} matches. "
                 "Type more of the name to narrow them."
             )
         else:
-            self._count.set_text(f"{len(matches):,} matching chips")
+            self._count.set_text(f"{total:,} matching chips")
 
     def _choose_first(self, _entry: Gtk.SearchEntry) -> None:
         if self.names.get_n_items():

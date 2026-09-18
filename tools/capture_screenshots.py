@@ -17,14 +17,17 @@ from __future__ import annotations
 import os
 import sys
 import tempfile
+from dataclasses import dataclass
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT / "src"))
 
+# The simulator, with chips of its own that are thrown away afterwards.
+STATE = tempfile.TemporaryDirectory(prefix="t48-shots-")
 os.environ["T48_PROGRAMMER_DEMO"] = "1"
 os.environ["T48_PROGRAMMER_SIMULATOR_DELAY"] = "0"
-os.environ["T48_PROGRAMMER_SIMULATOR_STATE"] = tempfile.mkdtemp(prefix="t48-shots-")
+os.environ["T48_PROGRAMMER_SIMULATOR_STATE"] = STATE.name
 
 # The package comes first: importing it clears a Snap's GTK paths.
 from t48_programmer.application import ProgrammerApplication  # noqa: E402, I001
@@ -57,53 +60,59 @@ def render(window: Gtk.Window, name: str) -> None:
     print(f"docs/images/{name}.png")
 
 
+@dataclass(frozen=True)
+class Shot:
+    """One picture: the state to put the window in, and which window to draw.
+
+    draws names an attribute of the main window that holds another window, for
+    a picture of a dialog. unplugged takes the programmer away first.
+    """
+
+    name: str
+    state: str
+    draws: str = ""
+    unplugged: bool = False
+
+
+SHOTS = (
+    Shot("01-start", "main"),
+    Shot("02-guide", "guide"),
+    Shot("03-result", "result"),
+    Shot("05-help", "help"),
+    Shot("06-offline", "main", unplugged=True),
+    Shot("07-guide-burn", "guide-burn"),
+    Shot("08-guide-banks", "guide-banks"),
+    Shot("09-update", "app-update", draws="about_window"),
+    Shot("10-guide-images", "guide-images"),
+    Shot("11-fill-the-chip", "short-write", draws="last_dialog"),
+)
+
+
+def prepare(window: Gtk.Window, shot: Shot) -> Gtk.Window | None:
+    """Put the window in the state for a shot. Returns a dialog to draw, if any."""
+    os.environ["T48_PROGRAMMER_SIMULATOR_ABSENT"] = "1" if shot.unplugged else "0"
+    window.set_default_size(WIDTH, HEIGHT)
+    window.show_documentation_state(shot.state)
+    return getattr(window, shot.draws) if shot.draws else None
+
+
+def open_chooser(window: Gtk.Window) -> Gtk.Window:
+    """The one picture that is not a state of the main window."""
+    chooser = ChipChooser(window, load_catalogue("t48"), lambda _name: None)
+    chooser.search_entry.set_text("27C")
+    chooser.present()
+    return chooser
+
+
 def main() -> int:
     OUT.mkdir(parents=True, exist_ok=True)
     application = ProgrammerApplication(
         "com.github.pclarke.T48Programmer.Screenshots", unique=False
     )
-
-    def open_chooser(window: Gtk.Window) -> Gtk.Window:
-        chooser = ChipChooser(window, load_catalogue("t48"), lambda _name: None, "27C")
-        chooser.present()
-        return chooser
-
-    def show_offline(window: Gtk.Window) -> None:
-        os.environ["T48_PROGRAMMER_SIMULATOR_ABSENT"] = "1"
-        window.set_default_size(WIDTH, HEIGHT)
-        window.show_documentation_state("main")
-        window.show_dashboard()
-
-    def show_short_write(window: Gtk.Window) -> Gtk.Window:
-        window.show_documentation_state("short-write")
-        return window.last_dialog
-
-    def show_update(window: Gtk.Window) -> Gtk.Window:
-        os.environ["T48_PROGRAMMER_SIMULATOR_ABSENT"] = "0"
-        window.show_documentation_state("app-update")
-        return window.about_window
-
-    # Each step prepares a screen and returns the window to draw, or None for
-    # the main window.
     steps = [
-        ("01-start", lambda window: window.show_documentation_state("main")),
-        ("02-guide", lambda window: window.show_documentation_state("guide")),
-        ("07-guide-burn", lambda window: window.show_documentation_state("guide-burn")),
-        (
-            "08-guide-banks",
-            lambda window: window.show_documentation_state("guide-banks"),
-        ),
-        (
-            "10-guide-images",
-            lambda window: window.show_documentation_state("guide-images"),
-        ),
-        ("03-result", lambda window: window.show_documentation_state("result")),
-        ("04-choose-chip", open_chooser),
-        ("05-help", lambda window: window.show_documentation_state("help")),
-        ("06-offline", show_offline),
-        ("09-update", show_update),
-        ("11-fill-the-chip", show_short_write),
+        (shot.name, lambda window, shot=shot: prepare(window, shot)) for shot in SHOTS
     ]
+    steps.append(("04-choose-chip", open_chooser))
 
     def activate(_application: ProgrammerApplication) -> None:
         window = application.get_active_window()
@@ -140,8 +149,10 @@ def main() -> int:
         GLib.timeout_add(SETTLE_MILLISECONDS, advance)
 
     application.connect_after("activate", activate)
-    os.environ["T48_PROGRAMMER_DOCUMENTATION_STATE"] = "main"
-    return application.run([])
+    try:
+        return application.run([])
+    finally:
+        STATE.cleanup()
 
 
 if __name__ == "__main__":

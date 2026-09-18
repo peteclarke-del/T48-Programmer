@@ -21,6 +21,7 @@ from __future__ import annotations
 
 import argparse
 import os
+import stat
 import sys
 import tempfile
 import time
@@ -110,10 +111,30 @@ def delay() -> float:
     return float(os.environ.get("T48_PROGRAMMER_SIMULATOR_DELAY", "0.02"))
 
 
+def state_folder() -> Path:
+    """Where the chips are kept: a folder that is this user's and no one else's.
+
+    A fixed name in /tmp can be made first by another user of the machine, who
+    could leave a symbolic link in it where a chip would go, and a write to the
+    chip would then overwrite whatever the link pointed at. The folder is kept
+    under the user's runtime directory where there is one, is made private, and
+    is refused if it turns out to belong to someone else.
+    """
+    named = os.environ.get("T48_PROGRAMMER_SIMULATOR_STATE")
+    if named:
+        folder = Path(named)
+    else:
+        base = os.environ.get("XDG_RUNTIME_DIR") or tempfile.gettempdir()
+        folder = Path(base) / f"t48-programmer-simulator-{os.getuid()}"
+    folder.mkdir(mode=0o700, parents=True, exist_ok=True)
+    status = folder.lstat()
+    if status.st_uid != os.getuid() or not stat.S_ISDIR(status.st_mode):
+        raise SystemExit(f"{folder} is not a folder of yours, so it was not used.")
+    return folder
+
+
 def state_file(chip: Chip) -> Path:
-    default = Path(tempfile.gettempdir()) / "t48-programmer-simulator"
-    folder = Path(os.environ.get("T48_PROGRAMMER_SIMULATOR_STATE", default))
-    folder.mkdir(parents=True, exist_ok=True)
+    folder = state_folder()
     safe_name = "".join(c if c.isalnum() else "_" for c in chip.name)
     return folder / f"{safe_name}.bin"
 

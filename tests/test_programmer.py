@@ -5,6 +5,7 @@ import unittest
 from unittest import mock
 
 from t48_programmer import minipro, programmer
+from t48_programmer.minipro import QueryResult
 from t48_programmer.programmer import (
     detect_programmer,
     firmware_warning,
@@ -61,7 +62,9 @@ class DetectProgrammerTests(unittest.TestCase):
         self.assertIn("not installed", result.summary)
 
     def test_asks_minipro_which_programmer_is_attached(self) -> None:
-        with mock.patch.object(minipro, "run_query", return_value="t48: T48\n") as run:
+        with mock.patch.object(
+            minipro, "run_query", return_value=QueryResult(0, "", "t48: T48\n")
+        ) as run:
             result = detect_programmer()
 
         self.assertTrue(result.connected)
@@ -98,7 +101,9 @@ class BannerTests(unittest.TestCase):
 
     def test_reads_the_minipro_version(self) -> None:
         text = "minipro version 0.7.4     A free and open TL866 series programmer\n"
-        with mock.patch.object(minipro, "run_query", return_value=text):
+        with mock.patch.object(
+            minipro, "run_query", return_value=QueryResult(0, "", text)
+        ):
             self.assertEqual(tool_version(), "0.7.4")
         with mock.patch.object(minipro, "run_query", return_value=None):
             self.assertEqual(tool_version(), "")

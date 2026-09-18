@@ -37,12 +37,12 @@ from .programmer import (  # noqa: E402
 )
 from .rom_image import (  # noqa: E402
     KEY_FILE_NAME,
-    MAX_INSPECTED_BYTES,
     ImageIdentity,
     OpenedRom,
     RomKeyError,
     RomKeyMissing,
     copies_to_fill,
+    describe,
     fingerprint,
     fit_text,
     identify,
@@ -59,8 +59,6 @@ from .rom_wizard import BURN, MACHINE, ROM, RomWizard  # noqa: E402
 
 _POLL_SECONDS = 5
 
-# Everything that needs a programmer to answer.
-_HARDWARE_ACTIONS = tuple(minipro.ACTIONS)
 
 _IMAGE_PATTERNS = ("*.bin", "*.rom", "*.img", "*.hex", "*.ihex", "*.srec", "*.s19")
 
@@ -112,6 +110,11 @@ _OFFLINE_WITHOUT_MINIPRO = (
 )
 
 
+def action_name(key: str) -> str:
+    """The name of the window action for a minipro action: read_id is read-id."""
+    return key.replace("_", "-")
+
+
 class MainWindow(Adw.ApplicationWindow):
     """The start page, and the pages that replace it while work is done."""
 
@@ -136,6 +139,8 @@ class MainWindow(Adw.ApplicationWindow):
         self.image_data: bytes | None = None
         self.image_bytes = 0
         self.image_identity: ImageIdentity | None = None
+        self._image_facts: tuple[tuple[str, str], ...] = ()
+        self._image_stamp: tuple[int, int] | None = None
         self.last_result: operations.OperationResult | None = None
         self.last_dialog: Adw.MessageDialog | None = None
         self.wizard: RomWizard | None = None
@@ -174,7 +179,9 @@ class MainWindow(Adw.ApplicationWindow):
         self._stack.add_named(self._build_progress_page(), "progress")
         self._stack.set_visible_child_name("checking")
         self.connect("close-request", self._close_requested)
-        GLib.timeout_add_seconds(_POLL_SECONDS, self._poll_programmer)
+        self._poll_source = GLib.timeout_add_seconds(
+            _POLL_SECONDS, self._poll_programmer
+        )
 
     # Menus and actions
 
@@ -193,7 +200,7 @@ class MainWindow(Adw.ApplicationWindow):
             "quit": self.close,
         }
         for key in minipro.ACTIONS:
-            callbacks[key.replace("_", "-")] = lambda key=key: self.start_action(key)
+            callbacks[action_name(key)] = lambda key=key: self.start_action(key)
         self._window_actions: dict[str, Gio.SimpleAction] = {}
         for name, callback in callbacks.items():
             action = Gio.SimpleAction.new(name, None)
@@ -203,13 +210,16 @@ class MainWindow(Adw.ApplicationWindow):
         self._set_hardware_actions_enabled(False)
 
     def _set_hardware_actions_enabled(self, enabled: bool) -> None:
-        for key in _HARDWARE_ACTIONS:
-            self._window_actions[key.replace("_", "-")].set_enabled(enabled)
+        """Every minipro action needs a programmer to answer."""
+        for key in minipro.ACTIONS:
+            self._window_actions[action_name(key)].set_enabled(enabled)
+        if self.wizard is not None:
+            self.wizard.set_can_burn(enabled)
 
     def _build_main_menu(self) -> Gio.MenuModel:
         def item(key: str, ellipsis: bool = False) -> tuple[str, str]:
             title = minipro.ACTIONS[key].title + ("…" if ellipsis else "")
-            return title, f"win.{key.replace('_', '-')}"
+            return title, f"win.{action_name(key)}"
 
         menus = {
             "File": (
@@ -248,8 +258,8 @@ class MainWindow(Adw.ApplicationWindow):
         root = Gio.Menu()
         for title, entries in menus.items():
             submenu = Gio.Menu()
-            for label, action_name in entries:
-                submenu.append(label, action_name)
+            for label, target in entries:
+                submenu.append(label, target)
             root.append_submenu(title, submenu)
         return root
 
@@ -288,14 +298,14 @@ class MainWindow(Adw.ApplicationWindow):
         self._progress_page.set_child(box)
         return self._progress_page
 
-    def _row_button(self, row: Adw.ActionRow, label: str, action_name: str) -> None:
+    def _row_button(self, row: Adw.ActionRow, label: str, target: str) -> None:
         """Put a command button at the end of a start page row.
 
         The buttons share a size group, so they are all as wide as the widest
         and line up down the page at both edges.
         """
         button = Gtk.Button(label=label, valign=Gtk.Align.CENTER)
-        button.set_action_name(action_name)
+        button.set_action_name(target)
         self._row_buttons.add_widget(button)
         row.add_suffix(button)
 
@@ -350,7 +360,7 @@ class MainWindow(Adw.ApplicationWindow):
             ("erase", "Erase…"),
         ):
             button = Gtk.Button(label=label)
-            button.set_action_name(f"win.{key.replace('_', '-')}")
+            button.set_action_name(f"win.{action_name(key)}")
             if key == "write":
                 button.add_css_class("suggested-action")
             buttons.append(button)
@@ -455,10 +465,7 @@ class MainWindow(Adw.ApplicationWindow):
             row = Adw.ActionRow(title=warning, title_lines=0, activatable=False)
             row.add_prefix(Gtk.Image(icon_name="dialog-warning-symbolic"))
             self._image_detail_rows.append(row)
-        details = identity.details
-        if self.image_data is not None:
-            details += fingerprint(self.image_data)
-        for label, value in details:
+        for label, value in self._image_facts:
             row = Adw.ActionRow(title=label, subtitle=value, subtitle_selectable=True)
             row.add_css_class("property")
             self._image_detail_rows.append(row)
@@ -473,22 +480,32 @@ class MainWindow(Adw.ApplicationWindow):
         self._image_details.set_visible(bool(self._image_detail_rows))
         self._image_details.set_expanded(bool(warnings))
 
-    def _fit_text(self) -> str:
-        chip_bytes = self.chip_info.code_bytes if self.chip_info else 0
-        return fit_text(self.image_bytes, chip_bytes, self.image_identity)
+    @property
+    def _programmer_key(self) -> str:
+        """The programmer whose chip database is in use: the one attached, or the T48."""
+        return self._programmer.key or minipro.DEFAULT_PROGRAMMER
 
-    def choose_chip(self) -> None:
-        catalogue = chips.load_catalogue(self._programmer.key or "t48")
+    @property
+    def _chip_bytes(self) -> int:
+        return self.chip_info.code_bytes if self.chip_info else 0
+
+    def _fit_text(self) -> str:
+        return fit_text(self.image_bytes, self._chip_bytes, self.image_identity)
+
+    def _open_chooser(self, on_chosen: Callable[[str], None]) -> None:
+        catalogue = chips.load_catalogue(self._programmer_key)
         if not catalogue:
             self._show_error("Choose Chip", self._programmer.summary)
             return
-        chooser = ChipChooser(self, catalogue, self.set_chip)
-        chooser.present()
+        ChipChooser(self, catalogue, on_chosen).present()
+
+    def choose_chip(self) -> None:
+        self._open_chooser(self.set_chip)
 
     def set_chip(self, name: str) -> None:
         """Select a chip and ask minipro what it knows about it."""
         self.chip = name
-        self.chip_info = chips.chip_info(name, self._programmer.key or "t48")
+        self.chip_info = chips.chip_info(name, self._programmer_key)
         self.options_panel.set_chip_info(self.chip_info)
         self._refresh_target_rows()
 
@@ -496,13 +513,10 @@ class MainWindow(Adw.ApplicationWindow):
         if not self.chip:
             self.toast("Choose a chip first.")
             return
-        output = minipro.run_query(
-            ["-q", minipro.database_name(self._programmer.key), "-d", self.chip]
-        )
         self._show_result(
             self.chip,
             "What minipro knows about this chip",
-            (output or "").strip(),
+            self.chip_info.text if self.chip_info else "minipro gave no answer.",
             icon_name="dialog-information-symbolic",
         )
 
@@ -534,31 +548,26 @@ class MainWindow(Adw.ApplicationWindow):
     def _ask_for_key(
         self, path: Path, on_opened: Callable[[OpenedRom], None], reason: str
     ) -> None:
-        dialog = Adw.MessageDialog.new(
-            self,
+        def choose_key() -> None:
+            self._choose_file(
+                f"Choose {KEY_FILE_NAME}",
+                Gtk.FileChooserAction.OPEN,
+                "Use Key",
+                lambda key: self.open_rom_with_key(path, on_opened, key),
+                filtered=False,
+            )
+
+        self._ask(
             "This Kickstart Is Encrypted",
             f"{reason} Choose the {KEY_FILE_NAME} that came with it. The ROM is "
             "decrypted in memory and the file is left as it is.",
+            {
+                "cancel": ("Cancel", None),
+                "choose": (f"Choose {KEY_FILE_NAME}…", choose_key),
+            },
+            appearance=Adw.ResponseAppearance.SUGGESTED,
+            default="choose",
         )
-        dialog.add_response("cancel", "Cancel")
-        dialog.add_response("choose", f"Choose {KEY_FILE_NAME}…")
-        dialog.set_response_appearance("choose", Adw.ResponseAppearance.SUGGESTED)
-        dialog.set_default_response("choose")
-        dialog.set_close_response("cancel")
-
-        def respond(_dialog: Adw.MessageDialog, response: str) -> None:
-            if response == "choose":
-                self._choose_file(
-                    f"Choose {KEY_FILE_NAME}",
-                    Gtk.FileChooserAction.OPEN,
-                    "Use Key",
-                    lambda key: self.open_rom_with_key(path, on_opened, key),
-                    filtered=False,
-                )
-
-        dialog.connect("response", respond)
-        self.last_dialog = dialog
-        dialog.present()
 
     def _set_image(self, opened: OpenedRom) -> None:
         path = opened.path
@@ -572,16 +581,55 @@ class MainWindow(Adw.ApplicationWindow):
         # while the window still describes it.
         self.image_bytes = opened.byte_count
         self.image_identity = opened.identity
+        # Worked out once. The rows are redrawn every time the chip changes,
+        # and hashing a large image each time would stall the window.
+        self._image_facts = opened.identity.details + (
+            fingerprint(opened.data) if opened.data is not None else ()
+        )
+        self._image_stamp = self._stamp(path)
         self._refresh_target_rows()
+
+    @staticmethod
+    def _stamp(path: Path) -> tuple[int, int] | None:
+        try:
+            status = path.stat()
+        except OSError:
+            return None
+        return status.st_size, status.st_mtime_ns
+
+    def _image_is_as_opened(self) -> bool:
+        """False, having read the file again, if it changed since it was opened.
+
+        minipro is given the path and reads the file itself. If the file has
+        been rebuilt in the meantime, what is burned is not what the window
+        identified, checked for size and described in its confirmation.
+        """
+        if self.image_path is None or self._stamp(self.image_path) == self._image_stamp:
+            return True
+        name = self.image_path.name
+        self.load_image(self.image_path)
+        self.toast(f"{name} has changed on disk and was read again. Check it first.")
+        return False
+
+    def _set_image_from_memory(self, path: Path, data: bytes) -> bool:
+        """Save bytes the window already holds and make them the current image."""
+        try:
+            path.write_bytes(data)
+        except OSError as error:
+            self._show_error("Save Image", f"{path.name} could not be saved: {error}")
+            return False
+        # There is no need to read back and hash what was just written.
+        self._set_image(OpenedRom(path, len(data), data, identify(data)))
+        return True
 
     # The guided ROM burn
 
     def open_rom_wizard(self) -> None:
         """Start the guide, from the open image when it is a ROM it knows."""
-        self.wizard = RomWizard(self, self._window_actions["write"])
-        existing = self._stack.get_child_by_name("wizard")
-        if existing is not None:
-            self._stack.remove(existing)
+        if self.wizard is not None:
+            self.wizard.release()
+            self._stack.remove(self.wizard)
+        self.wizard = RomWizard(self, can_burn=self._programmer.connected)
         self._stack.add_named(self.wizard, "wizard")
         identity = self.image_identity
         family = FAMILIES_BY_KEY.get(identity.kind) if identity else None
@@ -607,14 +655,10 @@ class MainWindow(Adw.ApplicationWindow):
 
     def choose_other_chip(self, on_chosen: Callable[[str, int], None]) -> None:
         def chosen(name: str) -> None:
-            info = chips.chip_info(name, self._programmer.key or "t48")
+            info = chips.chip_info(name, self._programmer_key)
             on_chosen(name, info.code_bytes if info is not None else 0)
 
-        catalogue = chips.load_catalogue(self._programmer.key or "t48")
-        if not catalogue:
-            self._show_error("Choose Chip", self._programmer.summary)
-            return
-        ChipChooser(self, catalogue, chosen).present()
+        self._open_chooser(chosen)
 
     def _scratch_folder(self) -> Path:
         """A private folder for generated images, removed when the window closes."""
@@ -633,14 +677,16 @@ class MainWindow(Adw.ApplicationWindow):
         on_finished: Callable[[operations.OperationResult], None],
     ) -> None:
         """Write one chip of a set and verify it, then report back to the guide."""
+        if self._held_by_update():
+            return
         if not self._programmer.connected:
             self.toast("Offline. Save the parts, or connect a programmer to burn them.")
             return
         path = self._part_path(part, stem, self._scratch_folder())
-        path.write_bytes(part.data)
+        if not self._set_image_from_memory(path, part.data):
+            return
         minipro.insert_blank_chip(part.device)
         self.set_chip(part.device)
-        self.load_image(path)
         self._confirm_action(minipro.ACTIONS["write"], path, on_finished)
 
     def save_parts(self, parts: tuple[RomPart, ...], stem: str) -> None:
@@ -665,7 +711,7 @@ class MainWindow(Adw.ApplicationWindow):
     def start_action(self, key: str) -> None:
         """Begin an operation, gathering a file and a confirmation as needed."""
         action = minipro.ACTIONS[key]
-        if self._active_operation is not None:
+        if self._active_operation is not None or self._held_by_update():
             return
         # The menu entries and buttons are disabled while offline, but this is
         # also reached directly, from the guided ROM burn for one.
@@ -677,6 +723,8 @@ class MainWindow(Adw.ApplicationWindow):
             return
         if action.file_role == "input" and self.image_path is None:
             self.toast("Open an image first.")
+            return
+        if action.file_role == "input" and not self._image_is_as_opened():
             return
         if action.file_role == "output":
             suffix = self.options_panel.options().file_format or "bin"
@@ -694,6 +742,18 @@ class MainWindow(Adw.ApplicationWindow):
         else:
             self.run_action(action, path)
 
+    def _held_by_update(self) -> bool:
+        """True, with a word to the user, while an update is being installed.
+
+        apt is replacing minipro and its chip database at that moment. The
+        updater will not install while an operation runs, and this is the other
+        half of the same rule.
+        """
+        if self.app_updater.installing:
+            self.toast("An update is being installed. Try again when it has finished.")
+            return True
+        return False
+
     def _confirm_action(
         self,
         action: minipro.Action,
@@ -709,28 +769,34 @@ class MainWindow(Adw.ApplicationWindow):
         if copies and on_finished is None:
             self._confirm_short_write(heading, body, path, copies)
             return
-        dialog = Adw.MessageDialog.new(self, heading, body)
-        dialog.add_response("cancel", "Cancel")
-        dialog.add_response("confirm", confirm_label)
-        dialog.set_response_appearance("confirm", Adw.ResponseAppearance.DESTRUCTIVE)
-        dialog.set_default_response("cancel")
-        dialog.set_close_response("cancel")
-        dialog.connect(
-            "response",
-            lambda _dialog, response: (
-                self.run_action(action, path, on_finished)
-                if response == "confirm"
-                else None
-            ),
+        self._ask(
+            heading,
+            body,
+            {
+                "cancel": ("Cancel", None),
+                "confirm": (
+                    confirm_label,
+                    lambda: self.run_action(action, path, on_finished),
+                ),
+            },
         )
-        self.last_dialog = dialog
-        dialog.present()
 
     def _copies_to_fill(self) -> int:
-        if self.image_data is None or self.image_identity is None:
+        """How many copies of the image fill the chip, where that is worth asking.
+
+        Only for a plain memory chip and its code memory. The data EEPROM of a
+        microcontroller is another size altogether, and firmware written twice
+        is not a ROM made visible but a mistake.
+        """
+        info = self.chip_info
+        if self.image_data is None or self.image_identity is None or info is None:
             return 0
-        chip_bytes = self.chip_info.code_bytes if self.chip_info else 0
-        return copies_to_fill(self.image_bytes, chip_bytes, self.image_identity)
+        if not info.is_plain_memory or self.options_panel.options().memory not in (
+            "",
+            "code",
+        ):
+            return 0
+        return copies_to_fill(self.image_bytes, info.code_bytes, self.image_identity)
 
     def _confirm_short_write(
         self, heading: str, body: str, path: Path, copies: int
@@ -750,27 +816,23 @@ class MainWindow(Adw.ApplicationWindow):
             "Once puts the image at the bottom and leaves the rest of the chip as "
             "it is."
         )
-        dialog = Adw.MessageDialog.new(self, heading, body)
-        dialog.add_response("cancel", "Cancel")
-        dialog.add_response("once", "Write Once")
-        dialog.add_response("fill", "Fill the Chip")
-        dialog.set_response_appearance("fill", Adw.ResponseAppearance.DESTRUCTIVE)
-        dialog.set_default_response("cancel")
-        dialog.set_close_response("cancel")
 
-        def respond(_dialog: Adw.MessageDialog, response: str) -> None:
-            if response == "fill":
-                self.write_filled(copies)
-            elif response == "once":
-                # Choosing this is the consent that the size option in Options
-                # stands for, so it need not be found and switched on as well.
-                options = self.options_panel.options()
-                allowed = replace(options, size_policy=options.size_policy or "warn")
-                self.run_action(minipro.ACTIONS["write"], path, options=allowed)
+        def write_once() -> None:
+            # Choosing this is the consent that the size option in Options
+            # stands for, so it need not be found and switched on as well.
+            options = self.options_panel.options()
+            allowed = replace(options, size_policy=options.size_policy or "warn")
+            self.run_action(minipro.ACTIONS["write"], path, options=allowed)
 
-        dialog.connect("response", respond)
-        self.last_dialog = dialog
-        dialog.present()
+        self._ask(
+            heading,
+            body,
+            {
+                "cancel": ("Cancel", None),
+                "once": ("Write Once", write_once),
+                "fill": ("Fill the Chip", lambda: self.write_filled(copies)),
+            },
+        )
 
     def write_filled(self, copies: int) -> None:
         """Repeat the current image to fill the chip, and write that.
@@ -783,9 +845,8 @@ class MainWindow(Adw.ApplicationWindow):
         (data,) = fit_to_chip(
             self.image_data, len(self.image_data) * copies, segmented=False
         )
-        filled.write_bytes(data)
-        self.load_image(filled)
-        self.run_action(minipro.ACTIONS["write"], filled)
+        if self._set_image_from_memory(filled, data):
+            self.run_action(minipro.ACTIONS["write"], filled)
 
     def run_action(
         self,
@@ -851,25 +912,12 @@ class MainWindow(Adw.ApplicationWindow):
         if not self._active_action.destructive:
             self._cancel_now()
             return
-        dialog = Adw.MessageDialog.new(
-            self,
+        self._ask(
             "Stop Part Way Through?",
             "The chip will be left partly programmed and will need to be erased "
             "and written again.",
+            {"continue": ("Keep Going", None), "stop": ("Stop", self._cancel_now)},
         )
-        dialog.add_response("continue", "Keep Going")
-        dialog.add_response("stop", "Stop")
-        dialog.set_response_appearance("stop", Adw.ResponseAppearance.DESTRUCTIVE)
-        dialog.set_default_response("continue")
-        dialog.set_close_response("continue")
-        dialog.connect(
-            "response",
-            lambda _dialog, response: (
-                self._cancel_now() if response == "stop" else None
-            ),
-        )
-        self.last_dialog = dialog
-        dialog.present()
 
     def _cancel_now(self) -> None:
         if self._active_operation is not None:
@@ -922,43 +970,51 @@ class MainWindow(Adw.ApplicationWindow):
                 else "were not compared, because verification was turned off."
             )
         elif action.key == "read" and path is not None:
-            body = f"Saved to {path}\n{self._describe_file(path)}"
-            use = Gtk.Button(label="Use as Current Image")
-            use.add_css_class("suggested-action")
-            use.connect("clicked", lambda _button: self._use_read_image(path))
-            buttons.append(use)
+            body = f"Saved to {path}"
+            opened = self._open_quietly(path)
+            if opened is not None:
+                body += "\n" + describe(opened)
+                buttons.append(
+                    self._suggested("Use as Current Image", self._use_image, opened)
+                )
         elif action.key == "read_id" and result.chip_id:
             body = f"The chip reports ID {result.chip_id}, which matches {self.chip}."
         elif action.key.startswith("detect_spi"):
-            catalogue = set(chips.load_catalogue(self._programmer.key or "t48"))
+            catalogue = set(chips.load_catalogue(self._programmer_key))
             found = [
                 line for line in result.transcript.splitlines() if line in catalogue
             ]
             body = f"{len(found)} matching parts. They are listed below."
             if len(found) == 1:
                 body = f"The flash identifies as {found[0]}."
-                use = Gtk.Button(label=f"Choose {found[0]}")
-                use.add_css_class("suggested-action")
-                use.connect("clicked", lambda _button: self._use_detected(found[0]))
-                buttons.append(use)
+                buttons.append(
+                    self._suggested(f"Choose {found[0]}", self._use_detected, found[0])
+                )
         self._show_result(heading, body, result.transcript, buttons=tuple(buttons))
 
     @staticmethod
-    def _describe_file(path: Path) -> str:
-        """What a file that has just been read from a chip turned out to be."""
-        try:
-            if path.stat().st_size > MAX_INSPECTED_BYTES:
-                return size_text(path.stat().st_size)
-            data = path.read_bytes()
-        except OSError:
-            return ""
-        checksums = dict(fingerprint(data))
-        return (
-            f"{identify(data).title}, {checksums['Size']}, CRC-32 {checksums['CRC-32']}"
-        )
+    def _open_quietly(path: Path) -> OpenedRom | None:
+        """A file just read from a chip, opened once for the result page.
 
-    def _use_read_image(self, path: Path) -> None:
-        self.load_image(path)
+        A Kickstart is not encrypted in a chip, so no key is asked for, and a
+        file that cannot be read back is simply not described.
+        """
+        try:
+            return open_rom(path)
+        except (OSError, RomKeyError):
+            return None
+
+    @staticmethod
+    def _suggested(
+        label: str, action: Callable[..., None], *arguments: object
+    ) -> Gtk.Button:
+        button = Gtk.Button(label=label)
+        button.add_css_class("suggested-action")
+        button.connect("clicked", lambda _button: action(*arguments))
+        return button
+
+    def _use_image(self, opened: OpenedRom) -> None:
+        self._set_image(opened)
         self.show_dashboard()
 
     def _use_detected(self, name: str) -> None:
@@ -1035,7 +1091,14 @@ class MainWindow(Adw.ApplicationWindow):
             f"Firmware: {self._firmware or 'not yet read'}"
         )
         controls = AppUpdateControls(self.app_updater)
-        attach_to_about(about, controls)
+        if not attach_to_about(about, controls):
+            # This libadwaita lays its About window out differently. The update
+            # must still have somewhere to show its progress and its questions.
+            self.record_diagnostic(
+                "Check for Application Updates",
+                "The About window had no place for the update controls.",
+            )
+            self._show_update_window(controls)
 
         def closed(_window: Adw.AboutWindow) -> bool:
             controls.detach()
@@ -1048,6 +1111,19 @@ class MainWindow(Adw.ApplicationWindow):
         about.present()
 
     # Application updates
+
+    def _show_update_window(self, controls: AppUpdateControls) -> None:
+        """A window of their own for the update controls, when About has no room."""
+        holder = Adw.Window(
+            transient_for=self, title="Application Updates", default_width=380
+        )
+        view = Adw.ToolbarView()
+        view.add_top_bar(Adw.HeaderBar())
+        for side in ("top", "bottom", "start", "end"):
+            getattr(controls, f"set_margin_{side}")(18)
+        view.set_content(controls)
+        holder.set_content(view)
+        holder.present()
 
     def check_for_updates(self) -> None:
         """Open the About window and check there, so that there is one check.
@@ -1068,23 +1144,15 @@ class MainWindow(Adw.ApplicationWindow):
         """Offer to restart when the update finished with the About window closed."""
         if self.about_window is not None or self.operation_running():
             return
-        dialog = Adw.MessageDialog.new(
-            self,
+        self._ask(
             f"Restart {APPLICATION_NAME}?",
             f"{release.name} is installed. Restart {APPLICATION_NAME} to use it.",
+            {
+                "later": ("_Later", None),
+                "restart": ("_Restart", self.app_updater.restart),
+            },
+            appearance=Adw.ResponseAppearance.SUGGESTED,
         )
-        dialog.add_response("later", "_Later")
-        dialog.add_response("restart", "_Restart")
-        dialog.set_response_appearance("restart", Adw.ResponseAppearance.SUGGESTED)
-        dialog.set_close_response("later")
-        dialog.connect(
-            "response",
-            lambda _dialog, response: (
-                self.app_updater.restart() if response == "restart" else None
-            ),
-        )
-        self.last_dialog = dialog
-        dialog.present()
 
     def restart(self) -> bool:
         """Quit and start the installed version, unless minipro is working."""
@@ -1120,34 +1188,63 @@ class MainWindow(Adw.ApplicationWindow):
         Gdk.Display.get_default().get_clipboard().set(text)
         self.toast("Copied")
 
-    def _show_error(
-        self, title: str, summary: str, diagnostic: str = ""
+    def _ask(
+        self,
+        heading: str,
+        body: str,
+        responses: dict[str, tuple[str, Callable[[], None] | None]],
+        *,
+        appearance: Adw.ResponseAppearance | None = Adw.ResponseAppearance.DESTRUCTIVE,
+        default: str = "",
+        extra_child: Gtk.Widget | None = None,
     ) -> Adw.MessageDialog:
-        dialog = Adw.MessageDialog.new(self, title, summary)
-        dialog.add_response("close", "Close")
-        if diagnostic:
-            dialog.set_extra_child(self._build_transcript(diagnostic, height=140))
-            dialog.add_response("copy", "Copy Details")
-            dialog.connect(
-                "response",
-                lambda _dialog, response: (
-                    self._copy_text(diagnostic) if response == "copy" else None
-                ),
-            )
-        dialog.set_default_response("close")
-        dialog.set_close_response("close")
+        """Put a question, and run whatever goes with the answer.
+
+        responses maps each answer to its label and to what it does, in the
+        order the buttons appear. The first is the safe answer: it is what
+        closing the dialog means, and the default unless another is named. The
+        last is the one that acts, and takes the appearance given.
+        """
+        dialog = Adw.MessageDialog.new(self, heading, body)
+        for name, (label, _action) in responses.items():
+            dialog.add_response(name, label)
+        names = list(responses)
+        if appearance is not None and len(names) > 1:
+            dialog.set_response_appearance(names[-1], appearance)
+        dialog.set_default_response(default or names[0])
+        dialog.set_close_response(names[0])
+        if extra_child is not None:
+            dialog.set_extra_child(extra_child)
+
+        def respond(_dialog: Adw.MessageDialog, response: str) -> None:
+            action = responses.get(response, ("", None))[1]
+            if action is not None:
+                action()
+
+        dialog.connect("response", respond)
         self.last_dialog = dialog
         dialog.present()
         return dialog
 
+    def _show_error(
+        self, title: str, summary: str, diagnostic: str = ""
+    ) -> Adw.MessageDialog:
+        if not diagnostic:
+            return self._ask(title, summary, {"close": ("Close", None)})
+        return self._ask(
+            title,
+            summary,
+            {
+                "close": ("Close", None),
+                "copy": ("Copy Details", lambda: self._copy_text(diagnostic)),
+            },
+            appearance=None,
+            extra_child=self._build_transcript(diagnostic, height=140),
+        )
+
     # Programmer detection
 
-    def begin_programmer_detection(
-        self,
-        detector: Callable[[], ProgrammerProbeResult] = detect_programmer,
-        *,
-        silent: bool = False,
-    ) -> None:
+    def begin_programmer_detection(self, *, silent: bool = False) -> None:
         """Run detection without blocking GTK's event loop."""
         if self._detection_active:
             return
@@ -1157,8 +1254,16 @@ class MainWindow(Adw.ApplicationWindow):
             self._programmer_row.set_subtitle("")
 
         def worker() -> None:
-            result = detector()
-            version = self._tool_version or tool_version()
+            # Whatever goes wrong, the window must hear that detection is over,
+            # or it stays on "Looking for the programmer" for good.
+            try:
+                result = detect_programmer()
+                version = self._tool_version or tool_version()
+            except Exception as error:  # noqa: BLE001 - reported, not lost
+                result = ProgrammerProbeResult(
+                    False, f"The programmer could not be looked for: {error!r}"
+                )
+                version = self._tool_version
             call_on_main_loop(
                 self._finish_programmer_detection, result, version, silent
             )
@@ -1198,6 +1303,7 @@ class MainWindow(Adw.ApplicationWindow):
         first = not self._initial_detection_complete
         self._detection_active = False
         self._initial_detection_complete = True
+        changed_model = result.connected and result.key != self._programmer_key
         self._programmer = result
         self._tool_version = version
         if not result.connected:
@@ -1208,6 +1314,10 @@ class MainWindow(Adw.ApplicationWindow):
         )
         self.offline_banner.set_revealed(not result.connected)
         self._refresh_programmer_row()
+        if changed_model and self.chip:
+            # Each programmer has its own database. The size and the voltages
+            # on show were another model's.
+            self.set_chip(self.chip)
         if first:
             self.show_dashboard()
         if was_connected != result.connected or not silent:
@@ -1229,7 +1339,11 @@ class MainWindow(Adw.ApplicationWindow):
             self.toast("minipro is still working. Cancel it or wait for it to finish.")
             return True
         # Done here and not on "destroy": GTK emits that at dispose, which does
-        # not come while Python still holds the window.
+        # not come while Python still holds the window. The timer holds the
+        # window too, and would go on looking for a programmer for ever.
+        if self._poll_source:
+            GLib.source_remove(self._poll_source)
+            self._poll_source = 0
         if self._scratch is not None:
             self._scratch.cleanup()
             self._scratch = None

@@ -24,8 +24,7 @@ Only the repository maintainer publishes a release.
    python3 -m compileall -q src tests tools
    ruff check src tests tools
    ruff format --check src tests tools
-   bash -n t48-programmer packaging/*.sh
-   sh -n packaging/t48-programmer packaging/postinst packaging/postrm
+   packaging/check-scripts.sh
    desktop-file-validate data/com.github.pclarke.T48Programmer.desktop
    appstreamcli validate --no-net data/com.github.pclarke.T48Programmer.metainfo.xml
    ```

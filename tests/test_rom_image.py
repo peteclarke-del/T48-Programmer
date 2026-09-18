@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 import tempfile
 import unittest
 from pathlib import Path
@@ -7,6 +8,8 @@ from pathlib import Path
 from t48_programmer import samples
 from t48_programmer.rom_image import (
     KIB,
+    MAX_KEY_BYTES,
+    MAX_KICKSTART_BYTES,
     ImageIdentity,
     RomKeyError,
     RomKeyMissing,
@@ -18,6 +21,7 @@ from t48_programmer.rom_image import (
     identify,
     kickstart_checksum_valid,
     open_rom,
+    read_at_most,
     size_text,
     swap_byte_pairs,
 )
@@ -136,6 +140,49 @@ class EncryptedKickstartTests(unittest.TestCase):
         (elsewhere / "my.key").write_bytes(KEY)
 
         self.assertTrue(open_rom(self.rom, elsewhere / "my.key").decrypted)
+
+    def test_something_that_is_not_a_file_is_refused_and_not_read_for_ever(
+        self,
+    ) -> None:
+        # A FIFO reports a size of nothing and then never stops giving bytes.
+        pipe = self.folder / "endless.rom"
+        os.mkfifo(pipe)
+
+        with self.assertRaisesRegex(OSError, "not a regular file"):
+            open_rom(pipe)
+        with self.assertRaises(OSError):
+            read_at_most(self.folder, 10)
+
+    def test_a_fifo_or_a_folder_called_rom_key_is_not_taken_for_the_key(self) -> None:
+        os.mkfifo(self.folder / "rom.key")
+
+        self.assertIsNone(find_key(self.rom))
+        with self.assertRaises(RomKeyMissing):
+            open_rom(self.rom)
+
+    def test_a_key_too_large_to_be_one_is_not_read_into_memory(self) -> None:
+        huge = self.folder / "huge.key"
+        huge.write_bytes(bytes(MAX_KEY_BYTES + 1))
+
+        with self.assertRaisesRegex(RomKeyError, "too large to be a key"):
+            open_rom(self.rom, huge)
+
+    def test_reading_stops_at_the_limit_whatever_the_size_was_said_to_be(self) -> None:
+        path = self.folder / "big.bin"
+        path.write_bytes(bytes(1000))
+
+        self.assertEqual(read_at_most(path, 1000), bytes(1000))
+        self.assertIsNone(read_at_most(path, 999))
+
+    def test_a_large_file_that_merely_begins_like_a_kickstart_is_not_checksummed(
+        self,
+    ) -> None:
+        # Summing 64 MB as a Kickstart took 700 MB and three seconds.
+        lookalike = samples.kickstart()[:4] + bytes(MAX_KICKSTART_BYTES)
+
+        self.assertEqual(identify(lookalike).kind, "binary")
+        with self.assertRaisesRegex(RomKeyError, "too large"):
+            decrypt_kickstart(b"AMIROMTYPE1" + lookalike, KEY)
 
     def test_a_plain_rom_is_opened_as_it_is(self) -> None:
         plain = self.folder / "tos206.img"

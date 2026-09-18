@@ -6,6 +6,9 @@ import signal
 import subprocess
 import threading
 
+# How long an interrupted minipro is given to go before it is killed.
+KILL_AFTER_SECONDS = 5.0
+
 
 class OperationController:
     """Cancel a running minipro by delivering the terminal interrupt.
@@ -15,6 +18,10 @@ class OperationController:
     read or a verify. After a write or an erase the chip holds whatever had
     been programmed so far, which is why the window asks before cancelling
     those.
+
+    Should a future minipro catch the interrupt and carry on, it is killed a
+    few seconds later. Without that the Cancel button, already spent, would
+    leave the user to wait out the full timeout of the operation.
     """
 
     def __init__(self) -> None:
@@ -45,11 +52,20 @@ class OperationController:
         if process is not None:
             self._interrupt(process)
 
+    @classmethod
+    def _interrupt(cls, process: subprocess.Popen[str]) -> None:
+        cls._signal(process, signal.SIGINT)
+        backstop = threading.Timer(
+            KILL_AFTER_SECONDS, cls._signal, (process, signal.SIGKILL)
+        )
+        backstop.daemon = True
+        backstop.start()
+
     @staticmethod
-    def _interrupt(process: subprocess.Popen[str]) -> None:
+    def _signal(process: subprocess.Popen[str], number: int) -> None:
         try:
             if process.poll() is None:
-                process.send_signal(signal.SIGINT)
+                process.send_signal(number)
         except OSError:
             # The process exited between poll() and signal delivery.
             pass

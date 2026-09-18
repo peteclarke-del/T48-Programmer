@@ -288,15 +288,25 @@ class MainWindow(Adw.ApplicationWindow):
         self._progress_page.set_child(box)
         return self._progress_page
 
+    def _row_button(self, row: Adw.ActionRow, label: str, action_name: str) -> None:
+        """Put a command button at the end of a start page row.
+
+        The buttons share a size group, so they are all as wide as the widest
+        and line up down the page at both edges.
+        """
+        button = Gtk.Button(label=label, valign=Gtk.Align.CENTER)
+        button.set_action_name(action_name)
+        self._row_buttons.add_widget(button)
+        row.add_suffix(button)
+
     def _build_dashboard(self) -> Gtk.Widget:
         page = Adw.PreferencesPage()
+        self._row_buttons = Gtk.SizeGroup(mode=Gtk.SizeGroupMode.HORIZONTAL)
 
         hardware = Adw.PreferencesGroup(title="Programmer")
         self._programmer_row = Adw.ActionRow(title="Looking for the programmer…")
         self._programmer_row.add_prefix(Gtk.Image(icon_name="media-flash-symbolic"))
-        reconnect = Gtk.Button(label="Reconnect", valign=Gtk.Align.CENTER)
-        reconnect.set_action_name("win.reconnect")
-        self._programmer_row.add_suffix(reconnect)
+        self._row_button(self._programmer_row, "Reconnect", "win.reconnect")
         hardware.add(self._programmer_row)
         page.add(hardware)
 
@@ -306,24 +316,23 @@ class MainWindow(Adw.ApplicationWindow):
             subtitle="Amiga Kickstart, Atari TOS and Acorn ROMs, from the image to "
             "verified chips",
         )
-        start_guide = Gtk.Button(label="Start…", valign=Gtk.Align.CENTER)
-        start_guide.set_action_name("win.rom-wizard")
-        guide_row.add_suffix(start_guide)
+        self._row_button(guide_row, "Start…", "win.rom-wizard")
         guide.add(guide_row)
         page.add(guide)
 
         target = Adw.PreferencesGroup(title="Chip and Image")
         self._chip_row = Adw.ActionRow(title_lines=1)
-        choose = Gtk.Button(label="Choose…", valign=Gtk.Align.CENTER)
-        choose.set_action_name("win.choose-chip")
-        self._chip_row.add_suffix(choose)
+        self._row_button(self._chip_row, "Choose…", "win.choose-chip")
         target.add(self._chip_row)
-        self._image_row = Adw.ExpanderRow(title_lines=1)
-        open_image = Gtk.Button(label="Open…", valign=Gtk.Align.CENTER)
-        open_image.set_action_name("win.open-image")
-        self._image_row.add_suffix(open_image)
-        self._image_detail_rows: list[Gtk.Widget] = []
+        self._image_row = Adw.ActionRow(title_lines=1)
+        self._row_button(self._image_row, "Open…", "win.open-image")
         target.add(self._image_row)
+        # The details have a row of their own. An expander draws its arrow
+        # after any button it is given, which would push Open out of line with
+        # the buttons above it.
+        self._image_details = Adw.ExpanderRow(title="Image Details", visible=False)
+        self._image_detail_rows: list[Gtk.Widget] = []
+        target.add(self._image_details)
         page.add(target)
 
         actions = Adw.PreferencesGroup()
@@ -430,12 +439,12 @@ class MainWindow(Adw.ApplicationWindow):
             self._chip_row.set_subtitle("Every operation needs to know the exact part")
 
         for row in self._image_detail_rows:
-            self._image_row.remove(row)
+            self._image_details.remove(row)
         self._image_detail_rows.clear()
         if self.image_path is None or self.image_identity is None:
             self._image_row.set_title("No image opened")
             self._image_row.set_subtitle("Needed to write or verify a chip")
-            self._image_row.set_enable_expansion(False)
+            self._image_details.set_visible(False)
             return
         identity = self.image_identity
         summary = [identity.title, size_text(self.image_bytes)]
@@ -454,9 +463,15 @@ class MainWindow(Adw.ApplicationWindow):
             row.add_css_class("property")
             self._image_detail_rows.append(row)
         for row in self._image_detail_rows:
-            self._image_row.add_row(row)
-        self._image_row.set_enable_expansion(bool(self._image_detail_rows))
-        self._image_row.set_expanded(bool(identity.warnings))
+            self._image_details.add_row(row)
+        warnings = len(identity.warnings)
+        self._image_details.set_subtitle(
+            "Checksums and what the image was identified as"
+            if not warnings
+            else f"{warnings} warning" + ("s" if warnings > 1 else "")
+        )
+        self._image_details.set_visible(bool(self._image_detail_rows))
+        self._image_details.set_expanded(bool(warnings))
 
     def _fit_text(self) -> str:
         chip_bytes = self.chip_info.code_bytes if self.chip_info else 0

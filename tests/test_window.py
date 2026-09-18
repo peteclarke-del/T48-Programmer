@@ -154,18 +154,45 @@ class ConnectedWindowTests(WindowTestCase):
         self.assertEqual(self.window._image_row.get_title(), "kick31.rom")
         self.assertIn("Amiga Kickstart 3.1", subtitle)
         self.assertIn("Fits the chip exactly.", subtitle)
-        self.assertFalse(self.window._image_row.get_expanded())
+        self.assertFalse(self.window._image_details.get_expanded())
 
         self.window.set_chip("AT28C256")
 
         self.assertIn("the chip holds 32 KB", self.window._image_row.get_subtitle())
+
+    def test_the_start_page_buttons_line_up(self) -> None:
+        buttons = self.window._row_buttons.get_widgets()
+        self.window.load_image(self.image("kick31.rom", samples.kickstart()))
+        pump(lambda: False, timeout=0.3)
+
+        self.assertEqual(
+            sorted(button.get_label() for button in buttons),
+            ["Choose…", "Open…", "Reconnect", "Start…"],
+        )
+        self.assertEqual(len({button.get_width() for button in buttons}), 1)
+        # Every button ends at the same distance from the edge of the window.
+        edges = {
+            round(
+                button.compute_bounds(self.window)[1].get_x()
+                + button.compute_bounds(self.window)[1].get_width()
+            )
+            for button in buttons
+        }
+        self.assertEqual(len(edges), 1)
+
+    def test_image_details_appear_only_when_there_is_an_image(self) -> None:
+        self.assertFalse(self.window._image_details.get_visible())
+
+        self.window.load_image(self.image("kick31.rom", samples.kickstart()))
+
+        self.assertTrue(self.window._image_details.get_visible())
 
     def test_a_suspect_image_opens_its_warnings(self) -> None:
         damaged = bytearray(samples.kickstart())
         damaged[0x2000] ^= 0xFF
         self.window.load_image(self.image("bad.rom", bytes(damaged)))
 
-        self.assertTrue(self.window._image_row.get_expanded())
+        self.assertTrue(self.window._image_details.get_expanded())
 
     def test_an_image_deleted_after_opening_does_not_break_the_page(self) -> None:
         path = self.image("gone.rom", samples.acorn_rom())

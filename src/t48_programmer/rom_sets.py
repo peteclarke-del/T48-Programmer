@@ -315,6 +315,24 @@ def fit_to_chip(data: bytes, chip_bytes: int, *, segmented: bool) -> list[bytes]
     return [data + ERASED_BYTE * (chip_bytes - len(data))]
 
 
+def bank_spans(
+    layout: RomLayout, option: ChipOption, image_sizes: Sequence[int]
+) -> list[tuple[int, int]]:
+    """The first bank and the number of banks each image takes, in order.
+
+    Most images take one bank. A 128 KB Master MOS takes eight, so the bank an
+    image lands in is not its place in the list. A board that does not page its
+    ROMs has no banks to count, and each image there is simply one.
+    """
+    bank = min(layout.bank_bytes, option.chip_bytes)
+    spans, first = [], 0
+    for size in image_sizes:
+        count = max(1, -(-size // bank)) if bank else 1
+        spans.append((first, count))
+        first += count
+    return spans
+
+
 def join_banks(layout: RomLayout, option: ChipOption, images: Sequence[bytes]) -> bytes:
     """Line several images up on bank boundaries, the first at the bottom.
 

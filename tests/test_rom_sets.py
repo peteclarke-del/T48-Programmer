@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import unittest
 
-from t48_programmer import samples, simulator
+from t48_programmer import chips, minipro, samples, simulator
 from t48_programmer.rom_image import KIB, identify, swap_byte_pairs
 from t48_programmer.rom_sets import (
     FAMILIES,
@@ -10,6 +10,7 @@ from t48_programmer.rom_sets import (
     LAYOUTS,
     LAYOUTS_BY_KEY,
     RomSetError,
+    bank_spans,
     fit_to_chip,
     join_banks,
     layouts_for,
@@ -245,6 +246,35 @@ class BankTests(unittest.TestCase):
 
         self.assertEqual(self.burn("M27C1001@DIP32", [bytes(mos)]), bytes(mos))
 
+    def test_an_image_is_labelled_with_the_banks_it_really_takes(self) -> None:
+        chip = self.chip("SST39SF020A")
+        sizes = [16 * KIB, 8 * KIB, 128 * KIB, 16 * KIB]
+
+        self.assertEqual(
+            bank_spans(self.LAYOUT, chip, sizes), [(0, 1), (1, 1), (2, 8), (10, 1)]
+        )
+        self.assertEqual(
+            bank_spans(self.LAYOUT, self.chip("2764@DIP28"), [8 * KIB]), [(0, 1)]
+        )
+
+    def test_a_board_without_banks_counts_each_image_as_one(self) -> None:
+        # A 192 KB TOS is one image, however many 32 KB chips it is cut across.
+        # Counting it as six banks once threw the image away.
+        layout, chip = first_chip("atari-st-six")
+
+        self.assertEqual(bank_spans(layout, chip, [192 * KIB]), [(0, 1)])
+
+    def test_eight_images_fill_a_128_kb_flash_chip_in_order(self) -> None:
+        images = [samples.acorn_rom(16 * KIB, f"ROM {n}") for n in range(8)]
+
+        data = self.burn("SST39SF010A", images)
+
+        for number, image in enumerate(images):
+            with self.subTest(bank=number):
+                self.assertEqual(
+                    data[number * 16 * KIB : (number + 1) * 16 * KIB], image
+                )
+
     def test_what_cannot_be_banked_is_refused(self) -> None:
         chip = self.chip("W27C512@DIP28")
         for images, message in (
@@ -342,6 +372,42 @@ class EveryLayoutTests(unittest.TestCase):
         every = [machine for layout in LAYOUTS for machine in layout.machines]
         self.assertEqual(len(every), len(set(every)))
         self.assertNotIn("A1000", every)
+
+    def test_the_chips_this_project_was_built_around_are_offered(self) -> None:
+        # The parts on the bench, by the names minipro gives them. The speed
+        # and package suffixes printed on a chip are not part of that name:
+        # an AT28C256-15PU is AT28C256, an SST39SF010A-70-4C-PHE is
+        # SST39SF010A, and an AM27C400-120DC is AM27C400@DIP40.
+        def devices(key: str) -> set[str]:
+            return {chip.device for chip in LAYOUTS_BY_KEY[key].chips}
+
+        self.assertLessEqual({"AT28C256", "SST39SF010A"}, devices("acorn-rom"))
+        self.assertIn("AM27C400@DIP40", devices("amiga-single"))
+        self.assertIn("AM27C400@DIP40", devices("amiga-pair"))
+        acorn = LAYOUTS_BY_KEY["acorn-rom"]
+        banks = {chip.device: acorn.bank_count(chip) for chip in acorn.chips}
+        self.assertEqual((banks["AT28C256"], banks["SST39SF010A"]), (2, 8))
+
+    @unittest.skipUnless(
+        minipro.base_command() and not minipro.demo_mode(), "minipro is not installed"
+    )
+    def test_every_offered_chip_is_in_minipro_with_the_size_claimed(self) -> None:
+        # Runs wherever a real minipro is found, or is named with
+        # T48_PROGRAMMER_MINIPRO. A name minipro does not know, or a size that
+        # differs, would send someone to the last page of the guide with a
+        # chip that cannot be burned.
+        catalogue = set(chips.load_catalogue("t48"))
+        self.assertGreater(len(catalogue), 1000)
+        for device, size in sorted(
+            {
+                (chip.device, chip.chip_bytes)
+                for layout in LAYOUTS
+                for chip in layout.chips
+            }
+        ):
+            with self.subTest(device):
+                self.assertIn(device, catalogue)
+                self.assertEqual(chips.chip_info(device, "t48").code_bytes, size)
 
     def test_the_simulator_knows_every_chip_the_guide_offers(self) -> None:
         # Otherwise the demonstration breaks at the chip step for that board.

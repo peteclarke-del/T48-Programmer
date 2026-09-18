@@ -150,7 +150,16 @@ covered yet.
 Acorn machines page their ROMs in 16 KB banks, so a 32 KB chip has room for
 two, a 64 KB chip for four, and a 256 KB chip for sixteen. One image alone is
 repeated into every bank and works in any socket. Add more and each takes the
-next bank up from the bottom of the chip.
+next bank up from the bottom of the chip. An SST39SF010A, for one, takes eight
+16 KB images.
+
+![Three images, each with a drag handle, its bank, and arrows](docs/images/10-guide-images.png)
+
+The order of the images is the order of the banks. Drag an image by its handle
+onto another to move it there, or use the arrows on its row, which keep the
+keyboard focus so that an image can be walked up or down with Space. Each row
+shows the bank it will occupy, which is a range for an image that takes several,
+such as a 128 KB Master MOS.
 
 A plain BBC Micro socket holds the upper address pins high, so it reads the top
 bank and nothing else. Different ROMs in one chip appear only where something

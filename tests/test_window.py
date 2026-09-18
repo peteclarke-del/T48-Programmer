@@ -505,6 +505,129 @@ class GuideBankTests(GuideTestCase):
 
         self.assertEqual([rom.path.name for rom in wizard.answers.images], ["A.rom"])
 
+    def eight_roms(self) -> RomWizard:
+        wizard = self.open_guide()
+        self.answer(wizard, "acorn-rom", "acorn-rom", "BBC Master", "SST39SF010A")
+        for number in range(8):
+            self.add(
+                wizard, f"rom{number}.rom", samples.acorn_rom(title=f"ROM {number}")
+            )
+        return wizard
+
+    def order(self, wizard: RomWizard) -> str:
+        return "".join(rom.path.stem[-1] for rom in wizard.answers.images)
+
+    def test_eight_images_fill_a_128_kb_flash_chip(self) -> None:
+        wizard = self.eight_roms()
+
+        self.assertEqual(self.order(wizard), "01234567")
+        self.assertFalse(wizard.add_image_button.get_sensitive())
+        wizard.go_to(BURN)
+        (part,) = wizard.parts
+        self.assertEqual(len(part.data), 128 * KIB)
+        self.assertEqual(part.data[-16 * KIB :], samples.acorn_rom(title="ROM 7"))
+
+    def test_an_image_is_moved_to_another_bank_and_the_chip_follows(self) -> None:
+        wizard = self.eight_roms()
+
+        wizard.move_image(7, 0)
+
+        self.assertEqual(self.order(wizard), "70123456")
+        self.assertEqual(wizard.step, IMAGES)
+        wizard.go_to(BURN)
+        self.assertEqual(
+            wizard.parts[0].data[: 16 * KIB], samples.acorn_rom(title="ROM 7")
+        )
+
+    def test_dropping_a_row_on_another_moves_it_there(self) -> None:
+        wizard = self.eight_roms()
+        row = wizard.image_rows[5]
+        controllers = list(row.observe_controllers())
+        self.assertTrue(any(isinstance(c, Gtk.DragSource) for c in controllers))
+        (target,) = [c for c in controllers if isinstance(c, Gtk.DropTarget)]
+
+        # Row 1 is dropped on row 5. The drop is accepted, and the page is
+        # rebuilt once the drop has finished and not during it.
+        self.assertTrue(wizard._dropped(1, 5))
+        self.assertEqual(self.order(wizard), "01234567")
+        pump(lambda: self.order(wizard) != "01234567", timeout=2)
+
+        self.assertEqual(self.order(wizard), "02345167")
+        self.assertEqual(target.get_actions(), Gdk.DragAction.MOVE)
+
+    def test_the_arrows_move_one_bank_at_a_time_and_keep_the_keyboard(self) -> None:
+        wizard = self.eight_roms()
+        self.assertFalse(wizard.arrows[0, -1].get_sensitive())
+        self.assertFalse(wizard.arrows[7, 1].get_sensitive())
+
+        wizard.arrows[6, 1].emit("clicked")
+
+        self.assertEqual(self.order(wizard), "01234576")
+        # ROM 6 is now last and cannot go higher, so the up arrow takes the focus.
+        self.assertTrue(wizard.arrows[7, -1].is_focus())
+
+        wizard.arrows[3, -1].emit("clicked")
+        wizard.arrows[2, -1].emit("clicked")
+
+        self.assertEqual(self.order(wizard), "03124576")
+        self.assertTrue(wizard.arrows[1, -1].is_focus())
+
+    def test_a_move_that_goes_nowhere_changes_nothing(self) -> None:
+        wizard = self.eight_roms()
+
+        for index, to in ((2, 2), (0, -1), (7, 8), (9, 0)):
+            wizard.move_image(index, to)
+
+        self.assertEqual(self.order(wizard), "01234567")
+
+    def test_one_image_has_nothing_to_be_moved_past(self) -> None:
+        wizard = self.open_guide()
+        self.answer(wizard, "acorn-rom", "acorn-rom", "BBC Master", "SST39SF010A")
+        self.add(wizard, "only.rom", samples.acorn_rom(title="Only"))
+
+        self.assertEqual(wizard.arrows, {})
+        controllers = list(wizard.image_rows[0].observe_controllers())
+        self.assertFalse(any(isinstance(c, Gtk.DragSource) for c in controllers))
+
+    def test_reordering_after_a_burn_marks_the_chip_as_waiting_again(self) -> None:
+        wizard = self.open_guide()
+        self.answer(wizard, "acorn-rom", "acorn-rom", "BBC Master", "AT28C256")
+        self.add(wizard, "a.rom", samples.acorn_rom(title="A"))
+        self.add(wizard, "b.rom", samples.acorn_rom(title="B"))
+        wizard.go_to(BURN)
+        wizard.burn(0)
+        self.respond("confirm")
+        self.wait_for_result()
+        self.assertEqual(wizard.status, [WRITTEN])
+
+        wizard.go_to(IMAGES)
+        wizard.move_image(1, 0)
+        wizard.go_to(BURN)
+
+        # What is in the socket no longer matches what the guide would burn.
+        self.assertEqual(wizard.status, [WAITING])
+
+    def test_a_master_mos_is_shown_across_the_banks_it_takes(self) -> None:
+        wizard = self.open_guide()
+        self.answer(wizard, "acorn-rom", "acorn-rom", "BBC Master", "SST39SF020A")
+        self.add(wizard, "mos320.rom", bytes(samples.filler(128 * KIB, 0x4D)))
+        self.add(wizard, "view.rom", samples.acorn_rom(title="View"))
+
+        self.assertEqual(wizard.spans(), [(0, 8), (8, 1)])
+        self.assertEqual(wizard.banks_used(), 9)
+        self.assertTrue(wizard.add_image_button.get_sensitive())
+
+        wizard.go_to(CHIP)
+        wizard.choose_chip(
+            next(c for c in wizard.answers.layout.chips if c.device == "SST39SF010A")
+        )
+
+        # Eight banks hold the MOS and nothing else.
+        self.assertEqual(
+            [rom.path.name for rom in wizard.answers.images], ["mos320.rom"]
+        )
+        self.assertFalse(wizard.add_image_button.get_sensitive())
+
     def test_an_image_can_be_removed(self) -> None:
         wizard = self.open_guide()
         self.answer(wizard, "acorn-rom", "acorn-rom", "BBC Master", "W27C512@DIP28")

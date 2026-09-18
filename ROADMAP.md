@@ -11,6 +11,8 @@
 - Encrypted Amiga Forever Kickstarts, decrypted with rom.key.
 - Logic and RAM tests, chip ID, SPI flash detection, programmer self test.
 - Offline mode.
+- Check for Application Updates, with a release workflow that publishes the
+  package and its checksums.
 - A simulator, a user guide, and a Debian package that bundles minipro.
 
 ## Next
@@ -37,8 +39,6 @@
 8. **Fuse editing** for microcontrollers. minipro exchanges fuses as a text
    file, which the application can already read and write. An editor with the
    fuse names is a better interface than a file chooser.
-9. **Check for Application Updates**, as in Greaseweazle-GUI, once there are
-   releases to check for.
 
 ## Left out on purpose
 

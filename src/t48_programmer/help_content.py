@@ -226,6 +226,46 @@ HELP_TOPICS = (
         ),
     ),
     HelpTopic(
+        "updates",
+        "Updating T48 Programmer",
+        "Check for a newer version from the Help menu and install it.",
+        (
+            HelpSection(
+                "Checking for a newer version",
+                (
+                    "Choose Help, Check for Application Updates. The About window opens and asks GitHub for the latest release, then compares it with the version shown above the button. The button in the About window does the same. The application checks only when you ask. Nothing is sent when it starts, and nothing else in the application uses the network.",
+                    "The answer shows under the button: that this is the newest version, or the newer version and the one you have. When GitHub cannot be reached or its answer cannot be read, it says Could not check for a newer version, with the reason, and never that this is the newest version.",
+                ),
+            ),
+            HelpSection(
+                "Installing it",
+                (),
+                (
+                    "Press Update to, followed by the new version number. A question says which package will be installed and shows the release notes.",
+                    "Press Download and Install. The package made for your system, such as Ubuntu 24.04 on amd64, is downloaded from GitHub and checked against the SHA256SUMS file published with it. A package that does not match is deleted and nothing is installed.",
+                    "The system asks for your password, and apt installs the package over the old one. ROM images and other files in your folders are not changed.",
+                    "Press Restart T48 Programmer to start the new version. If the About window was closed while the update ran, a question offers the restart.",
+                ),
+            ),
+            HelpSection(
+                "While it runs",
+                (
+                    "Closing the About window does not stop a download, and reopening it shows how far it has got. Cancel stops the download. Installing waits for as long as the password prompt is open. Once you answer it, apt runs to the end and cannot be cancelled.",
+                    "An update is not installed while a chip is being read, written, verified or erased, because the package replaces the minipro that the operation is using. The application does not restart during an operation either. Wait until the operation has finished, then press the button again.",
+                ),
+            ),
+            HelpSection(
+                "When it cannot install",
+                (
+                    "Dismissing the password prompt installs nothing and leaves the update offered.",
+                    "Without pkexec, or when the system does not allow the installation, the message gives a command to run in a terminal: sudo apt install followed by the downloaded package, which is kept in ~/.cache/t48-programmer/updates.",
+                    "A copy run from the source tree, or installed from the wheel, cannot update itself. The button then opens the release page. Update the source tree, or install the package from the release page.",
+                    "When the release has no package for your system, the message names the system and the button opens the release page, which lists the packages it has.",
+                ),
+            ),
+        ),
+    ),
+    HelpTopic(
         "troubleshooting",
         "Troubleshooting",
         "The problems that come up, and what each one usually means.",

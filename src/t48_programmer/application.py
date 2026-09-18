@@ -34,6 +34,8 @@ class ProgrammerApplication(Adw.Application):
         self.set_accels_for_action("win.open-image", ["<Control>o"])
         self.set_accels_for_action("win.choose-chip", ["<Control>k"])
         self.set_accels_for_action("win.quit", ["<Control>q"])
+        # Set by the window after an update, so main() starts the new version.
+        self.restart_requested = False
 
     def do_startup(self) -> None:
         Adw.Application.do_startup(self)

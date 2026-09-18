@@ -74,6 +74,10 @@ def main() -> int:
         window.show_documentation_state("main")
         window.show_dashboard()
 
+    def show_short_write(window: Gtk.Window) -> Gtk.Window:
+        window.show_documentation_state("short-write")
+        return window.last_dialog
+
     def show_update(window: Gtk.Window) -> Gtk.Window:
         os.environ["T48_PROGRAMMER_SIMULATOR_ABSENT"] = "0"
         window.show_documentation_state("app-update")
@@ -98,6 +102,7 @@ def main() -> int:
         ("05-help", lambda window: window.show_documentation_state("help")),
         ("06-offline", show_offline),
         ("09-update", show_update),
+        ("11-fill-the-chip", show_short_write),
     ]
 
     def activate(_application: ProgrammerApplication) -> None:
@@ -106,8 +111,16 @@ def main() -> int:
         pending = list(steps)
         extra: list[Gtk.Window] = []
 
-        def capture(name: str, target: Gtk.Window) -> bool:
-            render(target, name)
+        def capture(name: str, target: Gtk.Window, tries: int = 10) -> bool:
+            # A dialog that opens as another window closes can take a few
+            # frames to be drawn. Wait for it, within reason, and then fail.
+            try:
+                render(target, name)
+            except RuntimeError:
+                if tries == 0:
+                    raise
+                GLib.timeout_add(SETTLE_MILLISECONDS, capture, name, target, tries - 1)
+                return GLib.SOURCE_REMOVE
             for other in extra:
                 other.close()
             extra.clear()

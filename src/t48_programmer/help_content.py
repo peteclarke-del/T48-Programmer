@@ -117,7 +117,9 @@ HELP_TOPICS = (
                 "The sequence",
                 (
                     "minipro reads the chip ID, erases the chip if it can be erased electrically, writes the image, and reads it back to verify. Each stage appears on the progress page. A write that verifies has been read back from the chip byte for byte, so it is done.",
-                    "The image must be the same size as the chip. When it is not, the start page says so before you begin, and minipro stops rather than guess. For a ROM smaller than its chip, use the guided ROM burn so that it is repeated to fill the chip, or allow the mismatch under Options, Writing.",
+                    "The image must be the same size as the chip. When it is not, the start page says so before you begin, and minipro stops rather than guess.",
+                    "When the image is smaller than the chip and goes into it a whole number of times, Write asks how it should be written. Fill the Chip repeats the image to fill the chip, so that it is found whichever part of the chip the machine reads. Some machines need this: a BBC Micro holds the upper address pins of a socket high and so reads the top of a chip larger than 16 KB, where an image written once at the bottom is never seen. The filled image becomes the current image, so the start page describes what is in the chip and a later Verify compares all of it. Write Once puts the image at the bottom and leaves the rest of the chip as it is. The guided ROM burn fills without asking, because there the board is known.",
+                    "An image that does not divide into the chip, such as 96 KB in a 128 KB chip, is offered nothing, and minipro stops unless the mismatch is allowed under Options, Writing.",
                 ),
                 (
                     "Choose the chip, then open the image. Check the identification and the size line.",

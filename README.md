@@ -101,6 +101,15 @@ sudo apt install python3-gi gir1.2-gtk-4.0 gir1.2-adw-1
 4. Wait for the result page. A write that verifies has been read back from the
    chip and compared byte for byte.
 
+When the image is smaller than the chip and goes into it a whole number of
+times, as a 16 KB BBC ROM goes twice into a 32 KB AT28C256, the confirmation
+offers **Fill the Chip** as well as **Write Once**. Filling repeats the image so
+that it is found whichever part of the chip the machine reads, which a BBC Micro
+needs, since it reads the top of a chip larger than 16 KB. The filled image
+becomes the current image, so a later **Verify** compares the whole chip.
+
+![The question asked when an image goes into the chip twice](docs/images/11-fill-the-chip.png)
+
 A UV EPROM cannot be erased by the programmer. Erase it under an ultraviolet
 lamp and run **Blank Check** before writing. Programming can only change a 1 to
 a 0, so a write over old data fails verification.

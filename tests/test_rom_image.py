@@ -10,6 +10,7 @@ from t48_programmer.rom_image import (
     ImageIdentity,
     RomKeyError,
     RomKeyMissing,
+    copies_to_fill,
     decrypt_kickstart,
     find_key,
     fingerprint,
@@ -222,6 +223,39 @@ class OtherFormatTests(unittest.TestCase):
                 ("SHA-1", "f7c3bc1d808e04732adf679965ccc34ca7ae3441"),
             ),
         )
+
+
+class CopiesToFillTests(unittest.TestCase):
+    BINARY = ImageIdentity("binary", "Binary image")
+
+    def test_an_image_that_divides_into_the_chip_gives_the_number_of_copies(
+        self,
+    ) -> None:
+        self.assertEqual(copies_to_fill(16 * KIB, 32 * KIB, self.BINARY), 2)
+        self.assertEqual(copies_to_fill(8 * KIB, 64 * KIB, self.BINARY), 8)
+        self.assertEqual(copies_to_fill(256 * KIB, 512 * KIB, self.BINARY), 2)
+
+    def test_nothing_is_offered_where_filling_makes_no_sense(self) -> None:
+        cases = {
+            "the image fills the chip": (32 * KIB, 32 * KIB, self.BINARY),
+            "the image is larger than the chip": (64 * KIB, 32 * KIB, self.BINARY),
+            "the image does not divide into the chip": (
+                24 * KIB,
+                32 * KIB,
+                self.BINARY,
+            ),
+            "96 KB of TOS in a 128 KB chip": (96 * KIB, 128 * KIB, self.BINARY),
+            "the chip's size is not known": (16 * KIB, 0, self.BINARY),
+            "the image is empty": (0, 32 * KIB, self.BINARY),
+            "a HEX file, whose length is not its data's": (
+                16 * KIB,
+                32 * KIB,
+                ImageIdentity("ihex", "Intel HEX file"),
+            ),
+        }
+        for reason, arguments in cases.items():
+            with self.subTest(reason):
+                self.assertEqual(copies_to_fill(*arguments), 0)
 
 
 class FitTextTests(unittest.TestCase):

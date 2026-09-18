@@ -42,13 +42,19 @@ from .rom_image import (  # noqa: E402
     OpenedRom,
     RomKeyError,
     RomKeyMissing,
+    copies_to_fill,
     fingerprint,
     fit_text,
     identify,
     open_rom,
     size_text,
 )
-from .rom_sets import FAMILIES_BY_KEY, LAYOUTS_BY_KEY, RomPart  # noqa: E402
+from .rom_sets import (  # noqa: E402
+    FAMILIES_BY_KEY,
+    LAYOUTS_BY_KEY,
+    RomPart,
+    fit_to_chip,
+)
 from .rom_wizard import BURN, MACHINE, ROM, RomWizard  # noqa: E402
 
 _POLL_SECONDS = 5
@@ -699,6 +705,10 @@ class MainWindow(Adw.ApplicationWindow):
         if path is not None and self.image_identity is not None:
             notes = [self._fit_text(), *self.image_identity.warnings]
             body = "\n\n".join([body, *(note for note in notes if note)])
+        copies = self._copies_to_fill() if action.key == "write" else 0
+        if copies and on_finished is None:
+            self._confirm_short_write(heading, body, path, copies)
+            return
         dialog = Adw.MessageDialog.new(self, heading, body)
         dialog.add_response("cancel", "Cancel")
         dialog.add_response("confirm", confirm_label)
@@ -716,11 +726,73 @@ class MainWindow(Adw.ApplicationWindow):
         self.last_dialog = dialog
         dialog.present()
 
+    def _copies_to_fill(self) -> int:
+        if self.image_data is None or self.image_identity is None:
+            return 0
+        chip_bytes = self.chip_info.code_bytes if self.chip_info else 0
+        return copies_to_fill(self.image_bytes, chip_bytes, self.image_identity)
+
+    def _confirm_short_write(
+        self, heading: str, body: str, path: Path, copies: int
+    ) -> None:
+        """Ask how an image that goes into the chip several times should be written.
+
+        Written once, it sits at the bottom of the chip, and a machine that
+        reads another part of the chip never sees it. The guided ROM burn
+        repeats such an image without asking, because it knows the board. Here
+        the board is not known, so the choice is put to the user.
+        """
+        times = "twice" if copies == 2 else f"{copies} times"
+        body += (
+            f"\n\nFill the Chip writes the image {times}, so that it is found "
+            "whichever part of the chip the machine reads. Some machines need "
+            "this: a BBC Micro reads the top of a chip larger than 16 KB. Write "
+            "Once puts the image at the bottom and leaves the rest of the chip as "
+            "it is."
+        )
+        dialog = Adw.MessageDialog.new(self, heading, body)
+        dialog.add_response("cancel", "Cancel")
+        dialog.add_response("once", "Write Once")
+        dialog.add_response("fill", "Fill the Chip")
+        dialog.set_response_appearance("fill", Adw.ResponseAppearance.DESTRUCTIVE)
+        dialog.set_default_response("cancel")
+        dialog.set_close_response("cancel")
+
+        def respond(_dialog: Adw.MessageDialog, response: str) -> None:
+            if response == "fill":
+                self.write_filled(copies)
+            elif response == "once":
+                # Choosing this is the consent that the size option in Options
+                # stands for, so it need not be found and switched on as well.
+                options = self.options_panel.options()
+                allowed = replace(options, size_policy=options.size_policy or "warn")
+                self.run_action(minipro.ACTIONS["write"], path, options=allowed)
+
+        dialog.connect("response", respond)
+        self.last_dialog = dialog
+        dialog.present()
+
+    def write_filled(self, copies: int) -> None:
+        """Repeat the current image to fill the chip, and write that.
+
+        The filled image becomes the current image, so that the start page
+        describes what is in the chip and a later Verify compares all of it.
+        """
+        original = self.image_path
+        filled = self._scratch_folder() / f"{original.stem}-x{copies}{original.suffix}"
+        (data,) = fit_to_chip(
+            self.image_data, len(self.image_data) * copies, segmented=False
+        )
+        filled.write_bytes(data)
+        self.load_image(filled)
+        self.run_action(minipro.ACTIONS["write"], filled)
+
     def run_action(
         self,
         action: minipro.Action,
         path: Path | None = None,
         on_finished: Callable[[operations.OperationResult], None] | None = None,
+        options: minipro.Options | None = None,
     ) -> None:
         """Run minipro in a worker thread and follow it on the progress page.
 
@@ -731,7 +803,7 @@ class MainWindow(Adw.ApplicationWindow):
         controller = OperationController()
         self._active_operation = controller
         self._active_action = action
-        options = self.options_panel.options()
+        options = options or self.options_panel.options()
         if on_finished is not None:
             options = replace(options, skip_verify=False)
         self._progress_page.set_title(action.progress_title)
@@ -1195,6 +1267,13 @@ class MainWindow(Adw.ApplicationWindow):
                 self.wizard.add_image(open_rom(rom))
             if state == "guide-banks":
                 self.wizard.go_to(BURN)
+        elif state == "short-write":
+            # The question asked when an image goes into the chip twice.
+            rom = self._scratch_folder() / "Micro-C v1.0 (1987)(Beebug).bin"
+            rom.write_bytes(samples.acorn_rom(title="Micro-C"))
+            self.set_chip("AT28C256")
+            self.load_image(rom)
+            self.start_action("write")
         elif state == "app-update":
             # The About window after Check for Application Updates found the next
             # minor version. Nothing is fetched from GitHub.

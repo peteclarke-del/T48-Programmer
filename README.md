@@ -48,6 +48,9 @@ The current application:
   the chip would be left half written;
 - explains minipro's failures in plain terms and keeps its exact output in a
   diagnostic log;
+- checks for a newer release when asked, from the Help menu, then downloads the
+  package for the same system, verifies it against the release's checksums,
+  installs it and offers a restart;
 - works offline, with a banner that says so, for everything that does not need
   the programmer, and comes back online when one is connected; and
 - includes a user guide, opened with F1.
@@ -76,7 +79,7 @@ contains the application, minipro 0.7.4 built from source, its chip database,
 and the udev rules that let you use the programmer without root:
 
 ```sh
-sudo apt install ./t48-programmer_0.1.0_amd64.deb
+sudo apt install ./T48-Programmer_0.1.0_ubuntu24.04_amd64.deb
 ```
 
 To run from a checkout, install PyGObject, GTK 4 and libadwaita from your
@@ -186,6 +189,20 @@ machine and burned on another.
 The application looks for the programmer every few seconds while the start page
 is showing, and **Reconnect** looks at once. When one answers, the banner goes
 and the commands return with the chip and image still selected.
+
+## Updating
+
+![The About window offering a newer version](docs/images/09-update.png)
+
+**Help, Check for Application Updates** asks GitHub for the latest release and
+shows the answer in the About window. **Update to** downloads the package made
+for the same system as the installed one, checks it against the release's
+`SHA256SUMS`, installs it with `pkexec apt-get` after the system asks for your
+password, and offers a restart. It checks only when asked, and nothing else in
+the application uses the network. An update is never installed while a chip is
+being read or written, because the package replaces the minipro that the
+operation is using. A copy run from a checkout cannot update itself and is sent
+to the release page.
 
 ## Trying it without a programmer
 

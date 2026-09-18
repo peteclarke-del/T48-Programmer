@@ -24,7 +24,7 @@ class HelpContentTests(unittest.TestCase):
             with self.subTest(topic.slug):
                 self.assertTrue(topic.title and topic.summary and topic.sections)
                 for section in topic.sections:
-                    self.assertTrue(section.paragraphs)
+                    self.assertTrue(section.paragraphs or section.steps)
 
     def test_the_guide_names_commands_as_the_menus_do(self) -> None:
         text = guide_text()
@@ -33,6 +33,7 @@ class HelpContentTests(unittest.TestCase):
                 self.assertIn(ACTIONS[key].title, text)
         for phrase in (
             "Guided ROM Burn",
+            "Check for Application Updates",
             "Reset Options",
             "Diagnostic Log",
             "Self Test",

@@ -7,7 +7,7 @@ application, its user guide, minipro 0.7.4 compiled from source, minipro's chip
 database, and the udev rules for XGecu programmers. The distribution supplies
 Python, GTK 4, libadwaita, PyGObject and libusb.
 
-1. Download `t48-programmer_0.1.0_amd64.deb` and `SHA256SUMS` from the release
+1. Download `T48-Programmer_0.1.0_ubuntu24.04_amd64.deb` and `SHA256SUMS` from the release
    into the same folder.
 2. Verify the download:
 
@@ -18,7 +18,7 @@ Python, GTK 4, libadwaita, PyGObject and libusb.
 3. Install the package and its dependencies:
 
    ```sh
-   sudo apt install ./t48-programmer_0.1.0_amd64.deb
+   sudo apt install ./T48-Programmer_0.1.0_ubuntu24.04_amd64.deb
    ```
 
 4. Unplug the programmer and plug it in again. The package reloads the udev
@@ -30,6 +30,30 @@ The bundled minipro lives in `/usr/lib/t48-programmer/bin` and is used in
 preference to any other on the system, so the version that runs is the version
 the package was tested with. A minipro installed from your distribution is left
 alone and the two do not conflict.
+
+## Upgrading
+
+Choose **Help, Check for Application Updates**. When GitHub has a newer release,
+**Update to** downloads the package made for the same system as the installed
+one, checks it against the release's `SHA256SUMS`, and installs it with
+`pkexec apt-get install` after the system asks for your password. It then
+offers to restart the application. The check sends one request to
+api.github.com, and only when you ask. No update is installed while a chip is
+being read or written.
+
+The installed package records the system it was built for in
+`/usr/lib/t48-programmer/package-target`, and the update takes only the package
+built for that system. When a release has no package for it, the About window
+says so and opens the release page. A copy run from the source tree or
+installed from the wheel has no such record and is also sent to the release
+page.
+
+To upgrade by hand, download the newer `.deb`, verify its checksum, and install
+it with the same `apt install ./FILE.deb` command. A download that Check for
+Application Updates could not install is kept in
+`~/.cache/t48-programmer/updates` and can be installed the same way.
+
+Images you have read or prepared are outside the package and are not replaced.
 
 ## Running from source
 

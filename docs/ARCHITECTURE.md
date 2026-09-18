@@ -45,6 +45,8 @@ Without GTK:
 | `help_content.py` | The user guide, as data |
 | `samples.py` | Synthetic ROM images with valid headers, for tests and screenshots |
 | `simulator.py` | A stand-in for minipro, run as a script |
+| `app_update.py` | The update itself: which release is newer, which package suits this system, the checksum, and the install command |
+| `releases.py` | Reading the latest GitHub release and downloading its files |
 | `gtk_environment.py` | Removes GTK paths inherited from a Snap-packaged terminal |
 
 With GTK:
@@ -57,6 +59,8 @@ With GTK:
 | `chip_chooser.py` | The chip search window |
 | `rom_wizard.py` | The guided ROM burn: breadcrumbs, five steps, and the burn sequence |
 | `help_view.py` | Renders `help_content` |
+| `app_updater.py` | The update's state and its controls in the About window |
+| `main_loop.py` | The one way a worker thread hands a result to GTK |
 
 ## How an operation runs
 

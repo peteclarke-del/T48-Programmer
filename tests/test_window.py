@@ -19,8 +19,7 @@ import support
 REQUIRE_GTK = bool(os.environ.get("T48_PROGRAMMER_REQUIRE_GTK"))
 
 try:
-    # The package comes first: importing it clears a Snap's GTK paths.
-    from t48_programmer.application import ProgrammerApplication  # isort: skip
+    from gtk_support import shared_application  # isort: skip
     import gi
 except ImportError as error:
     if REQUIRE_GTK:
@@ -64,20 +63,6 @@ def pump(condition, timeout: float = TIMEOUT) -> bool:
         context.iteration(False)
         time.sleep(0.005)
     return True
-
-
-_application: ProgrammerApplication | None = None
-
-
-def shared_application() -> ProgrammerApplication:
-    """One application for the whole run. D-Bus allows a process only one."""
-    global _application
-    if _application is None:
-        _application = ProgrammerApplication(
-            f"com.github.pclarke.T48Programmer.Test{os.getpid()}", unique=False
-        )
-        _application.register(None)
-    return _application
 
 
 @unittest.skipUnless(HAVE_DISPLAY, "No display is available.")
@@ -311,6 +296,23 @@ class ConnectedWindowTests(WindowTestCase):
         panel.reset()
 
         self.assertEqual(panel.options(), Options())
+
+    def test_the_help_menu_checks_for_updates_in_the_about_window(self) -> None:
+        checks = []
+        self.window.app_updater.check = lambda: checks.append(True)
+
+        self.window.lookup_action("check-updates").activate(None)
+
+        self.assertIsNotNone(self.window.about_window)
+        self.assertEqual(checks, [True])
+        about = self.window.about_window
+
+        # Asked again with About already open, it checks there and opens no second.
+        self.window.lookup_action("check-updates").activate(None)
+
+        self.assertIs(self.window.about_window, about)
+        self.assertEqual(checks, [True, True])
+        about.close()
 
     def test_the_guide_and_the_log_open_in_the_window(self) -> None:
         for action in ("help", "diagnostics"):

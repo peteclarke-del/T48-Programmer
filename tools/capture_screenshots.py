@@ -74,6 +74,11 @@ def main() -> int:
         window.show_documentation_state("main")
         window.show_dashboard()
 
+    def show_update(window: Gtk.Window) -> Gtk.Window:
+        os.environ["T48_PROGRAMMER_SIMULATOR_ABSENT"] = "0"
+        window.show_documentation_state("app-update")
+        return window.about_window
+
     # Each step prepares a screen and returns the window to draw, or None for
     # the main window.
     steps = [
@@ -88,6 +93,7 @@ def main() -> int:
         ("04-choose-chip", open_chooser),
         ("05-help", lambda window: window.show_documentation_state("help")),
         ("06-offline", show_offline),
+        ("09-update", show_update),
     ]
 
     def activate(_application: ProgrammerApplication) -> None:

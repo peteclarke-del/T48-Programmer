@@ -38,8 +38,14 @@ bounty.
   when the window closes. A Kickstart decrypted with your rom.key is held in
   memory and in that folder only. The encrypted file and the key are never
   changed, and neither is sent anywhere.
-- It makes no network connections. It downloads no ROM images and no updates.
-- It needs no privileges. Access to the programmer comes from a udev rule that
+- It uses the network for one thing, and only when you ask: Check for
+  Application Updates sends a request to api.github.com, and an update you
+  accept is downloaded from GitHub, checked against the SHA256SUMS published
+  with the release, and installed by apt after the system asks for your
+  password. A package that does not match is deleted. Nothing is sent when the
+  application starts, and no ROM image is ever downloaded or uploaded.
+- It needs no privileges of its own. Installing an update is done by
+  `pkexec apt-get`, which asks for your password each time. Access to the programmer comes from a udev rule that
   grants it to the user logged in at the machine. Do not run it with sudo.
 
 ## Trust boundaries

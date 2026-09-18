@@ -14,11 +14,16 @@ project_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)"
 output_dir="${1:-${project_dir}/dist}"
 python_command="${PYTHON:-python3}"
 
+# shellcheck source=packaging/package-target.sh
+source "${project_dir}/packaging/package-target.sh"
+
 package_version="$(cd "${project_dir}/src" && "${python_command}" -c \
     'import t48_programmer; print(t48_programmer.__version__)')"
 minipro_version="$(tr -d '[:space:]' < "${project_dir}/packaging/minipro-version.txt")"
 minipro_sha256="$(tr -d '[:space:]' < "${project_dir}/packaging/minipro-source.sha256")"
 architecture="$(dpkg --print-architecture)"
+# Where minipro is compiled to look for its chip database. It is the same
+# folder as application_lib below, seen from the installed system.
 install_prefix=/usr/lib/t48-programmer
 
 if [[ "${package_version}" == *-* ]]; then
@@ -31,7 +36,7 @@ trap 'rm -rf -- "${build_dir}"' EXIT
 minipro_archive="${build_dir}/minipro-${minipro_version}.tar.gz"
 minipro_source="${build_dir}/minipro-${minipro_version}"
 package_root="${build_dir}/t48-programmer_${package_version}_${architecture}"
-application_lib="${package_root}${install_prefix}"
+application_lib="${package_root}/usr/lib/t48-programmer"
 doc_dir="${package_root}/usr/share/doc/t48-programmer"
 
 curl --fail --location --silent --show-error \
@@ -70,6 +75,10 @@ chmod -R go-w "${application_lib}"
 rm -rf -- "${application_lib}/bin"
 install -d "${application_lib}/bin"
 
+# Check for Application Updates reads this to take the package made for the
+# same system (t48_programmer.app_update.PACKAGE_TARGET).
+write_package_target "${application_lib}/package-target" "${architecture}"
+chmod 0644 "${application_lib}/package-target"
 install -m 0755 "${minipro_source}/minipro" "${application_lib}/bin/minipro"
 install -m 0644 "${minipro_source}/infoic.xml" "${minipro_source}/logicic.xml" \
     "${application_lib}/share/minipro/"
@@ -111,6 +120,6 @@ Description: Native Linux interface for the XGecu T48 chip programmer
  device-access rules.
 CONTROL
 
-artifact="${output_dir}/t48-programmer_${package_version}_${architecture}.deb"
+artifact="${output_dir}/$(package_file_name "${package_version}" "${architecture}")"
 dpkg-deb --root-owner-group --build "${package_root}" "${artifact}"
 echo "Created ${artifact}"

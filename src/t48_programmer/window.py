@@ -16,6 +16,8 @@ gi.require_version("Adw", "1")
 from gi.repository import Adw, Gdk, Gio, GLib, Gtk  # noqa: E402
 
 from . import __version__, chips, minipro, operations, samples  # noqa: E402
+from .app_update import AppRelease, parse_version  # noqa: E402
+from .app_updater import AppUpdateControls, AppUpdater, attach_to_about  # noqa: E402
 from .branding import (  # noqa: E402
     APPLICATION_ICON,
     APPLICATION_NAME,
@@ -25,6 +27,7 @@ from .branding import (  # noqa: E402
 )
 from .chip_chooser import ChipChooser  # noqa: E402
 from .help_view import HelpView  # noqa: E402
+from .main_loop import call_on_main_loop  # noqa: E402
 from .operation import OperationController  # noqa: E402
 from .options_panel import OptionsPanel  # noqa: E402
 from .programmer import (  # noqa: E402
@@ -103,19 +106,6 @@ _OFFLINE_WITHOUT_MINIPRO = (
 )
 
 
-def _to_main_loop(callback: Callable[..., bool], *arguments: object) -> None:
-    """Hand a result from a worker thread to the GTK thread.
-
-    GLib.idle_add is the usual way, but its default priority is the lowest in
-    the main loop, below redrawing. On a display with no frame pacing, such as
-    Xvfb or a slow remote session, an animated spinner keeps the loop busy with
-    redraws for ever, and an idle callback never runs. The window then sits on
-    "Looking for the programmer" with the answer waiting behind it. Results are
-    not idle work, so they are queued at the default priority.
-    """
-    GLib.idle_add(callback, *arguments, priority=GLib.PRIORITY_DEFAULT)
-
-
 class MainWindow(Adw.ApplicationWindow):
     """The start page, and the pages that replace it while work is done."""
 
@@ -143,6 +133,8 @@ class MainWindow(Adw.ApplicationWindow):
         self.last_result: operations.OperationResult | None = None
         self.last_dialog: Adw.MessageDialog | None = None
         self.wizard: RomWizard | None = None
+        self.app_updater = AppUpdater(self)
+        self.about_window: Adw.AboutWindow | None = None
 
         self._create_window_actions()
         toolbar_view = Adw.ToolbarView()
@@ -190,6 +182,7 @@ class MainWindow(Adw.ApplicationWindow):
             "reconnect": self.begin_programmer_detection,
             "help": self._show_help,
             "diagnostics": self._show_diagnostic_log,
+            "check-updates": self.check_for_updates,
             "about": self._show_about,
             "quit": self.close,
         }
@@ -242,6 +235,7 @@ class MainWindow(Adw.ApplicationWindow):
             "Help": (
                 ("User Guide", "win.help"),
                 ("Diagnostic Log", "win.diagnostics"),
+                ("Check for Application Updates…", "win.check-updates"),
                 (f"About {APPLICATION_NAME}", "win.about"),
             ),
         }
@@ -757,10 +751,12 @@ class MainWindow(Adw.ApplicationWindow):
                 chip=self.chip,
                 path=path,
                 options=options,
-                on_progress=lambda update: _to_main_loop(self._update_progress, update),
+                on_progress=lambda update: call_on_main_loop(
+                    self._update_progress, update
+                ),
                 controller=controller,
             )
-            _to_main_loop(self._finish_action, result, path, on_finished)
+            call_on_main_loop(self._finish_action, result, path, on_finished)
 
         threading.Thread(
             target=worker, name=f"minipro-{action.key}", daemon=True
@@ -966,7 +962,69 @@ class MainWindow(Adw.ApplicationWindow):
             f"Programmer: {self._programmer.model or 'none'}\n"
             f"Firmware: {self._firmware or 'not yet read'}"
         )
+        controls = AppUpdateControls(self.app_updater)
+        attach_to_about(about, controls)
+
+        def closed(_window: Adw.AboutWindow) -> bool:
+            controls.detach()
+            if self.about_window is about:
+                self.about_window = None
+            return False
+
+        about.connect("close-request", closed)
+        self.about_window = about
         about.present()
+
+    # Application updates
+
+    def check_for_updates(self) -> None:
+        """Open the About window and check there, so that there is one check.
+
+        The state of an update lives in the About window: the answer, the
+        download, the password prompt and the offer to restart. The menu entry
+        is a shorter way to the same button and not a second way to update.
+        """
+        if self.about_window is None:
+            self._show_about()
+        self.app_updater.check()
+
+    def operation_running(self) -> bool:
+        """True while minipro is working on a chip."""
+        return self._active_operation is not None
+
+    def app_update_installed(self, release: AppRelease) -> None:
+        """Offer to restart when the update finished with the About window closed."""
+        if self.about_window is not None or self.operation_running():
+            return
+        dialog = Adw.MessageDialog.new(
+            self,
+            f"Restart {APPLICATION_NAME}?",
+            f"{release.name} is installed. Restart {APPLICATION_NAME} to use it.",
+        )
+        dialog.add_response("later", "_Later")
+        dialog.add_response("restart", "_Restart")
+        dialog.set_response_appearance("restart", Adw.ResponseAppearance.SUGGESTED)
+        dialog.set_close_response("later")
+        dialog.connect(
+            "response",
+            lambda _dialog, response: (
+                self.app_updater.restart() if response == "restart" else None
+            ),
+        )
+        self.last_dialog = dialog
+        dialog.present()
+
+    def restart(self) -> bool:
+        """Quit and start the installed version, unless minipro is working."""
+        if self.operation_running():
+            return False
+        application = self.get_application()
+        if application is not None:
+            application.restart_requested = True
+        if self.about_window is not None:
+            self.about_window.close()
+        self.close()
+        return True
 
     def record_diagnostic(self, title: str, detail: str) -> None:
         """Add an entry to the session's Diagnostic Log."""
@@ -1029,7 +1087,9 @@ class MainWindow(Adw.ApplicationWindow):
         def worker() -> None:
             result = detector()
             version = self._tool_version or tool_version()
-            _to_main_loop(self._finish_programmer_detection, result, version, silent)
+            call_on_main_loop(
+                self._finish_programmer_detection, result, version, silent
+            )
 
         threading.Thread(
             target=worker, name="programmer-detection", daemon=True
@@ -1134,6 +1194,23 @@ class MainWindow(Adw.ApplicationWindow):
                 rom.write_bytes(samples.acorn_rom(title=title))
                 self.wizard.add_image(open_rom(rom))
             self.wizard.go_to(BURN)
+        elif state == "app-update":
+            # The About window after Check for Application Updates found the next
+            # minor version. Nothing is fetched from GitHub.
+            major, minor, _patch = parse_version(__version__) or (0, 0, 0)
+            version = f"{major}.{minor + 1}.0"
+            download = f"{HOMEPAGE}/releases/download/v{version}"
+            self.app_updater.show_result(
+                AppRelease(
+                    version,
+                    f"v{version}",
+                    f"{APPLICATION_NAME} {version}",
+                    f"{HOMEPAGE}/releases/tag/v{version}",
+                    package_url=f"{download}/package.deb",
+                    sums_url=f"{download}/SHA256SUMS",
+                )
+            )
+            self._show_about()
         elif state == "guide":
             self.open_rom_wizard()
             self.wizard.go_to(ROM)

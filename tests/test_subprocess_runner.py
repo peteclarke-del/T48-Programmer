@@ -6,7 +6,11 @@ import sys
 import unittest
 from unittest.mock import Mock
 
-from t48_programmer.subprocess_runner import clean_line, run_streaming_process
+from t48_programmer.subprocess_runner import (
+    MAX_LINE_LENGTH,
+    clean_line,
+    run_streaming_process,
+)
 
 
 def fake_process(lines: list[str], return_code: int = 0) -> Mock:
@@ -86,6 +90,30 @@ class StreamingProcessTests(unittest.TestCase):
                 "Reading Code...  0.5 Sec  OK",
             ],
         )
+
+    def test_a_cancel_that_arrives_as_the_process_succeeds_did_not_cancel_it(
+        self,
+    ) -> None:
+        # The chip was written and verified. Calling that "cancelled" would
+        # send the user off to erase a good chip.
+        finished = run_streaming_process(
+            ["minipro"],
+            timeout=10,
+            controller=Mock(cancelled=True),
+            process_factory=Mock(return_value=fake_process(["Verification OK\n"], 0)),
+        )
+        stopped = run_streaming_process(
+            ["minipro"],
+            timeout=10,
+            controller=Mock(cancelled=True),
+            process_factory=Mock(return_value=fake_process([], -2)),
+        )
+
+        self.assertFalse(finished.cancelled)
+        self.assertTrue(stopped.cancelled)
+
+    def test_a_runaway_line_is_cut_short(self) -> None:
+        self.assertEqual(len(clean_line("x" * 1_000_000)), MAX_LINE_LENGTH)
 
     def test_a_process_that_outlives_the_timeout_is_killed(self) -> None:
         result = run_python("import time; time.sleep(30)", timeout=0.3)

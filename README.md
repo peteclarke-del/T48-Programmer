@@ -215,8 +215,9 @@ and the commands return with the chip and image still selected.
 **Help, Check for Application Updates** asks GitHub for the latest release and
 shows the answer in the About window. **Update to** downloads the package made
 for the same system as the installed one, checks it against the release's
-`SHA256SUMS`, installs it with `pkexec apt-get` after the system asks for your
-password, and offers a restart. It checks only when asked, and nothing else in
+`SHA256SUMS`, installs it after the system asks for your password, and offers
+a restart. The package is checked a second time by the root-side installer, on
+a copy only root can touch, so it cannot be swapped while the prompt is open. It checks only when asked, and nothing else in
 the application uses the network. An update is never installed while a chip is
 being read or written, because the package replaces the minipro that the
 operation is using. A copy run from a checkout cannot update itself and is sent

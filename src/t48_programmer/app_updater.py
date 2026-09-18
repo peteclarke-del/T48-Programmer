@@ -13,7 +13,6 @@ from __future__ import annotations
 import threading
 from collections.abc import Callable
 from dataclasses import dataclass, replace
-from pathlib import Path
 from typing import Any, Protocol
 
 import gi
@@ -23,7 +22,7 @@ gi.require_version("Adw", "1")
 from gi.repository import Adw, Gio, GLib, Gtk  # noqa: E402
 
 from . import __version__, app_update  # noqa: E402
-from .app_update import AppRelease, PackageTarget  # noqa: E402
+from .app_update import AppRelease, PackageTarget, VerifiedPackage  # noqa: E402
 from .branding import APPLICATION_NAME  # noqa: E402
 from .main_loop import call_on_main_loop  # noqa: E402
 from .releases import Progress, UpdateCancelled  # noqa: E402
@@ -60,10 +59,10 @@ class UpdateService:
 
     def download(
         self, release: AppRelease, progress: Progress, cancel: threading.Event
-    ) -> Path:
+    ) -> VerifiedPackage:
         return app_update.download(release, progress, cancel)
 
-    def install(self, package: Path) -> None:
+    def install(self, package: VerifiedPackage) -> None:
         app_update.install(package)
 
 
@@ -75,10 +74,21 @@ class AppUpdateState:
     message: str = ""
     fraction: float | None = None
     release: AppRelease | None = None
+    # Cancel has been pressed and the download has not yet noticed.
+    cancelling: bool = False
 
     @property
     def busy(self) -> bool:
         return self.phase in ("checking", "downloading", "installing")
+
+    @property
+    def settled(self) -> bool:
+        """True when the new version is installed and only a restart remains.
+
+        Checking again then would compare against the version still running,
+        find the same release, and offer to install what is already installed.
+        """
+        return self.phase == "installed"
 
 
 def in_thread(
@@ -155,7 +165,7 @@ class AppUpdater:
         )
 
     def check(self) -> None:
-        if self.state.busy:
+        if self.state.busy or self.state.settled:
             return
         self._set(AppUpdateState("checking", "Asking GitHub for the newest version"))
 
@@ -183,13 +193,34 @@ class AppUpdater:
             call_on_main_loop(shown, done, total)
 
         def shown(done: int, total: int | None) -> None:
-            if self.state.phase == "downloading" and self.state.release is release:
+            state = self.state
+            if state.phase == "downloading" and state.release is release:
+                if state.cancelling:
+                    return
                 fraction = done / total if total else None
                 text = download_text(done, total)
                 self._set(AppUpdateState("downloading", text, fraction, release))
 
-        def downloaded(package: Path) -> None:
+        def downloaded(package: VerifiedPackage) -> None:
             self._cancel = None
+            # The download is only polled for a cancel between blocks, so one
+            # pressed at the very end arrives here with the package complete.
+            # It is still a cancel. The package is kept and used next time.
+            if cancel.is_set():
+                self._set(
+                    AppUpdateState(
+                        "available", "The update was cancelled.", release=release
+                    )
+                )
+                return
+            # Asked again, because the download may have taken minutes and the
+            # About window can be closed while it runs. The package replaces
+            # the minipro that an operation started since then would be using.
+            if self._host.operation_running():
+                self._set(
+                    AppUpdateState("available", BUSY_WHILE_RUNNING, release=release)
+                )
+                return
             message = f"Installing {release.name}. The system asks for your password."
             self._set(AppUpdateState("installing", message, None, release))
             in_thread(
@@ -225,8 +256,22 @@ class AppUpdater:
         )
 
     def cancel(self) -> None:
-        if self._cancel is not None:
+        """Stop the download, and say so at once.
+
+        The worker notices between blocks, which on a stalled connection can be
+        the length of a socket timeout. Without an answer in the meantime the
+        button would seem to do nothing.
+        """
+        if self._cancel is not None and not self._cancel.is_set():
             self._cancel.set()
+            self._set(
+                replace(self.state, message="Cancelling the download", cancelling=True)
+            )
+
+    @property
+    def installing(self) -> bool:
+        """True while apt is replacing the application and its minipro."""
+        return self.state.phase == "installing"
 
     def restart(self) -> None:
         """Restart into the installed version, or say why it cannot yet."""
@@ -287,6 +332,7 @@ class AppUpdateControls(Gtk.Box):
         self.status.set_text(state.message)
         self.status.set_visible(bool(state.message))
         self.progress_line.set_visible(state.phase == "downloading")
+        self.cancel_button.set_sensitive(not state.cancelling)
         if state.phase == "downloading":
             if state.fraction is None:
                 self.progress.pulse()

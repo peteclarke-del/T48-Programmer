@@ -6,6 +6,7 @@ import functools
 import hashlib
 import http.server
 import json
+import os
 import shutil
 import subprocess
 import sys
@@ -21,6 +22,7 @@ from t48_programmer.__main__ import main, restart_command
 from t48_programmer.app_update import (
     AppRelease,
     PackageTarget,
+    VerifiedPackage,
     check,
     download,
     install,
@@ -347,13 +349,37 @@ class ServedTests(unittest.TestCase):
     def test_the_package_is_downloaded_and_checked(self) -> None:
         found = self.publish()
         seen: list[tuple[int, int | None]] = []
-        path = download(
+        package = download(
             found, lambda done, total: seen.append((done, total)), folder=self.cache
         )
-        self.assertEqual(path, self.cache / PACKAGE)
-        self.assertEqual(path.read_bytes(), b"a package")
+        self.assertEqual(package.path, self.cache / PACKAGE)
+        self.assertEqual(package.sha256, hashlib.sha256(b"a package").hexdigest())
+        self.assertEqual(package.path.read_bytes(), b"a package")
         self.assertEqual(seen[-1], (9, 9))
         self.assertEqual(sorted(p.name for p in self.cache.iterdir()), [PACKAGE])
+
+    def test_a_verified_package_already_there_is_not_downloaded_again(self) -> None:
+        # As after a dismissed password prompt, and older packages are cleared.
+        found = self.publish()
+        self.cache.mkdir(parents=True, exist_ok=True)
+        (self.cache / PACKAGE).write_bytes(b"a package")
+        (self.cache / "T48-Programmer_0.0.1_ubuntu24.04_amd64.deb").write_bytes(b"old")
+        seen: list[tuple[int, int | None]] = []
+
+        package = download(found, lambda *step: seen.append(step), folder=self.cache)
+
+        self.assertEqual(seen, [])
+        self.assertEqual(package.path.read_bytes(), b"a package")
+        self.assertEqual(sorted(p.name for p in self.cache.iterdir()), [PACKAGE])
+
+    def test_a_damaged_package_already_there_is_replaced(self) -> None:
+        found = self.publish()
+        self.cache.mkdir(parents=True, exist_ok=True)
+        (self.cache / PACKAGE).write_bytes(b"half a pack")
+
+        package = download(found, folder=self.cache)
+
+        self.assertEqual(package.path.read_bytes(), b"a package")
 
     def test_a_package_that_does_not_match_its_checksum_is_removed(self) -> None:
         found = self.publish(sums=f"{'0' * 64}  {PACKAGE}\n".encode())
@@ -439,10 +465,14 @@ class InstallTests(unittest.TestCase):
     def setUp(self) -> None:
         self.folder = Path(tempfile.mkdtemp())
         self.addCleanup(shutil.rmtree, self.folder)
-        self.package = self.folder / PACKAGE
-        self.package.write_bytes(b"a package")
-        which = {"pkexec": "/usr/bin/pkexec", "apt-get": "/usr/bin/apt-get"}
-        patcher = mock.patch.object(app_update.shutil, "which", side_effect=which.get)
+        path = self.folder / PACKAGE
+        path.write_bytes(b"a package")
+        self.package = VerifiedPackage(path, hashlib.sha256(b"a package").hexdigest())
+        self.helper = self.folder / "install-update"
+        self.helper.write_text("#!/bin/sh\n")
+        patcher = mock.patch.object(
+            app_update.shutil, "which", return_value="/usr/bin/pkexec"
+        )
         patcher.start()
         self.addCleanup(patcher.stop)
 
@@ -453,21 +483,24 @@ class InstallTests(unittest.TestCase):
             )
         )
 
-    def test_apt_installs_the_package_with_the_users_password(self) -> None:
+    def install(self, run) -> None:
+        install(self.package, run=run, helper=self.helper)
+
+    def test_root_is_given_the_checksum_to_check_for_itself(self) -> None:
+        # Checked here and installed by path, the file could be swapped while
+        # the password prompt is open. The root side checks its own copy.
         run = self.run_with(0)
-        install(self.package, run=run)
-        command = run.call_args.args[0]
+        self.install(run)
         self.assertEqual(
-            command,
+            run.call_args.args[0],
             [
                 "/usr/bin/pkexec",
-                "/usr/bin/apt-get",
-                "install",
-                "--yes",
-                str(self.package),
+                str(self.helper),
+                str(self.package.path),
+                self.package.sha256,
             ],
         )
-        self.assertFalse(self.package.exists())
+        self.assertFalse(self.package.path.exists())
 
     def test_the_install_waits_for_the_password_prompt_and_apt_however_long(
         self,
@@ -475,36 +508,102 @@ class InstallTests(unittest.TestCase):
         # pkexec and apt run as root and cannot be stopped from here, so a time
         # limit would report a failure while apt went on to install.
         run = self.run_with(0)
-        install(self.package, run=run)
+        self.install(run)
         self.assertNotIn("timeout", run.call_args.kwargs)
 
     def test_a_dismissed_password_prompt_installs_nothing(self) -> None:
         with self.assertRaises(UpdateCancelled):
-            install(self.package, run=self.run_with(126))
-        self.assertTrue(self.package.exists())
+            self.install(self.run_with(126))
+        self.assertTrue(self.package.path.exists())
 
-    def test_a_refusal_or_an_apt_failure_says_what_to_run_by_hand(self) -> None:
+    def test_a_refusal_or_a_failure_says_what_to_run_by_hand(self) -> None:
         with self.assertRaises(UpdateError) as caught:
-            install(self.package, run=self.run_with(127))
+            self.install(self.run_with(127))
         self.assertNotIsInstance(caught.exception, UpdateCancelled)
         self.assertIn("did not allow", str(caught.exception))
-        self.assertIn(f"sudo apt install {self.package}", str(caught.exception))
+        self.assertIn(f"sudo apt install {self.package.path}", str(caught.exception))
+        changed = "The package changed after it was checked, so it was not installed.\n"
         with self.assertRaises(UpdateError) as caught:
-            install(
-                self.package, run=self.run_with(100, "E: Unable to locate package\n")
-            )
+            self.install(self.run_with(65, changed))
         self.assertNotIsInstance(caught.exception, UpdateCancelled)
-        self.assertIn("E: Unable to locate package", str(caught.exception))
-        self.assertTrue(self.package.exists())
+        self.assertIn("changed after it was checked", str(caught.exception))
+        self.assertTrue(self.package.path.exists())
 
-    def test_without_pkexec_the_command_is_given_instead(self) -> None:
+    def test_without_pkexec_or_the_installer_the_command_is_given_instead(self) -> None:
         with (
             mock.patch.object(app_update.shutil, "which", return_value=None),
             self.assertRaises(UpdateError) as caught,
         ):
-            install(self.package, run=self.run_with(0))
-        self.assertIn("pkexec is not installed", str(caught.exception))
+            self.install(self.run_with(0))
         self.assertIn("sudo apt install", str(caught.exception))
+        self.helper.unlink()
+        with self.assertRaises(UpdateError) as caught:
+            self.install(self.run_with(0))
+        self.assertIn("installer is missing", str(caught.exception))
+
+
+INSTALLER = PACKAGING / "install-update"
+
+
+class RootSideInstallerTests(unittest.TestCase):
+    """packaging/install-update, run for real with a stand-in for apt-get."""
+
+    def setUp(self) -> None:
+        self.folder = Path(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, self.folder)
+        self.package = self.folder / PACKAGE
+        self.package.write_bytes(b"a package")
+        self.sha256 = hashlib.sha256(b"a package").hexdigest()
+        tools = self.folder / "bin"
+        tools.mkdir()
+        self.seen = self.folder / "apt-saw"
+        apt = tools / "apt-get"
+        apt.write_text(f'#!/bin/sh\ncp "$3" "{self.seen}"\necho "$1 $2" >&2\n')
+        apt.chmod(0o755)
+        self.path = f"{tools}:{os.environ['PATH']}"
+
+    def run_installer(self, *arguments: str) -> subprocess.CompletedProcess:
+        return subprocess.run(
+            [str(INSTALLER), *arguments],
+            capture_output=True,
+            text=True,
+            env={**os.environ, "PATH": self.path},
+            check=False,
+        )
+
+    def leftovers(self) -> list[Path]:
+        return list(Path("/var/tmp").glob("t48-programmer-update.*"))
+
+    def test_apt_is_given_a_verified_copy_and_the_copy_is_removed(self) -> None:
+        before = self.leftovers()
+        done = self.run_installer(str(self.package), self.sha256)
+        self.assertEqual(done.returncode, 0, done.stderr)
+        self.assertIn("install --yes", done.stderr)
+        self.assertEqual(self.seen.read_bytes(), b"a package")
+        self.assertEqual(self.leftovers(), before)
+
+    def test_a_package_swapped_after_the_check_is_not_installed(self) -> None:
+        self.package.write_bytes(b"something else entirely")
+        done = self.run_installer(str(self.package), self.sha256)
+        self.assertEqual(done.returncode, 65)
+        self.assertIn("changed after it was checked", done.stderr)
+        self.assertFalse(self.seen.exists())
+
+    def test_anything_but_a_sha256_is_refused_before_the_file_is_touched(self) -> None:
+        for checksum in ("", "not-a-hash", "A" * 64, "0" * 63, "0" * 65, "$(id)"):
+            with self.subTest(checksum):
+                done = self.run_installer(str(self.package), checksum)
+                self.assertEqual(done.returncode, 64)
+                self.assertFalse(self.seen.exists())
+        self.assertEqual(self.run_installer(str(self.package)).returncode, 64)
+
+    def test_the_build_installs_it_where_the_application_looks(self) -> None:
+        builder = (PACKAGING / "build-deb.sh").read_text(encoding="utf-8")
+        self.assertIn('"${application_lib}/bin/install-update"', builder)
+        self.assertEqual(
+            app_update.INSTALL_HELPER,
+            app_update.PACKAGE_TARGET.parent / "bin" / "install-update",
+        )
 
 
 if __name__ == "__main__":

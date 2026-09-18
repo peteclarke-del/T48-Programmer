@@ -80,6 +80,10 @@ install -d "${application_lib}/bin"
 write_package_target "${application_lib}/package-target" "${architecture}"
 chmod 0644 "${application_lib}/package-target"
 install -m 0755 "${minipro_source}/minipro" "${application_lib}/bin/minipro"
+# Run as root by pkexec to install an update. It must be root-owned and not
+# writable by anyone else, which it is here and would not be in a home folder.
+install -m 0755 "${project_dir}/packaging/install-update" \
+    "${application_lib}/bin/install-update"
 install -m 0644 "${minipro_source}/infoic.xml" "${minipro_source}/logicic.xml" \
     "${application_lib}/share/minipro/"
 install -m 0755 "${project_dir}/packaging/t48-programmer" \

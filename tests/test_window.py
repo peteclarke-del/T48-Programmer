@@ -8,31 +8,27 @@ noticing. Every wait is bounded.
 
 from __future__ import annotations
 
+import dataclasses
 import os
 import tempfile
-import time
 import unittest
 from pathlib import Path
+from unittest import mock
 
 import support
 
-REQUIRE_GTK = bool(os.environ.get("T48_PROGRAMMER_REQUIRE_GTK"))
-
-try:
-    from gtk_support import shared_application  # isort: skip
-    import gi
-except ImportError as error:
-    if REQUIRE_GTK:
-        raise
-    raise unittest.SkipTest(f"PyGObject is not installed: {error}") from error
-
-gi.require_version("Gtk", "4.0")
-gi.require_version("Adw", "1")
-from gi.repository import Gdk, GLib, Gtk  # noqa: E402
+from gtk_support import HAVE_DISPLAY, pump, shared_application  # isort: skip
+from gi.repository import Gdk, Gtk  # noqa: E402
 
 from t48_programmer import samples  # noqa: E402
 from t48_programmer.minipro import ACTIONS, Options  # noqa: E402
-from t48_programmer.rom_image import KIB, open_rom, swap_byte_pairs  # noqa: E402
+from t48_programmer.rom_image import (  # noqa: E402
+    KIB,
+    crc32_text,
+    describe,
+    open_rom,
+    swap_byte_pairs,
+)
 from t48_programmer.rom_sets import FAMILIES_BY_KEY, LAYOUTS_BY_KEY  # noqa: E402
 from t48_programmer.rom_wizard import (  # noqa: E402
     BURN,
@@ -46,23 +42,6 @@ from t48_programmer.rom_wizard import (  # noqa: E402
     RomWizard,
 )
 from t48_programmer.window import MainWindow  # noqa: E402
-
-HAVE_DISPLAY = bool(Gtk.init_check()) and Gdk.Display.get_default() is not None
-if REQUIRE_GTK and not HAVE_DISPLAY:
-    raise RuntimeError("The interface tests need a display.")
-TIMEOUT = 15.0
-
-
-def pump(condition, timeout: float = TIMEOUT) -> bool:
-    """Run the main loop until condition() holds or the time runs out."""
-    context = GLib.MainContext.default()
-    deadline = time.monotonic() + timeout
-    while not condition():
-        if time.monotonic() > deadline:
-            return False
-        context.iteration(False)
-        time.sleep(0.005)
-    return True
 
 
 @unittest.skipUnless(HAVE_DISPLAY, "No display is available.")
@@ -282,6 +261,61 @@ class ConnectedWindowTests(WindowTestCase):
         self.assertEqual(chip[: 16 * KIB], rom)
         self.assertEqual(chip[16 * KIB :], b"\xff" * 16 * KIB)
 
+    def test_filling_is_not_offered_for_a_microcontroller_or_its_data_memory(
+        self,
+    ) -> None:
+        # Firmware written twice is not a ROM made visible. It is a mistake.
+        self.short_image()
+        info = self.window.chip_info
+        self.assertEqual(self.window._copies_to_fill(), 2)
+
+        self.window.chip_info = dataclasses.replace(
+            info, details={**info.details, "Memory": "16384 Words + 1024 Bytes"}
+        )
+        self.assertEqual(self.window._copies_to_fill(), 0)
+
+        self.window.chip_info = info
+        self.window.options_panel._readers["memory"] = lambda: "data"
+        self.assertEqual(self.window._copies_to_fill(), 0)
+
+    def test_an_image_rebuilt_since_it_was_opened_is_read_again_and_not_written(
+        self,
+    ) -> None:
+        # minipro reads the file itself. What it burned would not be what the
+        # window identified and described in its confirmation.
+        self.window.set_chip("AT28C256")
+        path = self.image("build.bin", bytes(samples.filler(32 * KIB, 1)))
+        self.window.load_image(path)
+        before = dict(self.window._image_facts)["CRC-32"]
+        path.write_bytes(bytes(samples.filler(32 * KIB, 2)))
+        os.utime(path, ns=(1, 1))
+
+        self.window.start_action("write")
+
+        self.assertIsNone(self.window.last_dialog)
+        self.assertIsNone(self.window.last_result)
+        self.assertNotEqual(dict(self.window._image_facts)["CRC-32"], before)
+
+        self.window.start_action("write")
+        self.assertIn("build.bin", self.window.last_dialog.get_body())
+        self.respond("cancel")
+
+    def test_a_different_programmer_has_the_chip_looked_up_again(self) -> None:
+        self.window.set_chip("AT28C256")
+        with mock.patch.object(self.window, "set_chip") as set_chip:
+            other = dataclasses.replace(self.window._programmer, key="tl866ii")
+            self.window._finish_programmer_detection(other, "0.7.4", True)
+            set_chip.assert_called_once_with("AT28C256")
+            self.window._finish_programmer_detection(other, "0.7.4", True)
+            set_chip.assert_called_once()
+
+    def test_closing_the_window_stops_it_looking_for_a_programmer(self) -> None:
+        self.assertTrue(self.window._poll_source)
+
+        self.assertFalse(self.window._close_requested(self.window))
+
+        self.assertEqual(self.window._poll_source, 0)
+
     def test_an_image_that_does_not_divide_into_the_chip_is_offered_nothing(
         self,
     ) -> None:
@@ -344,7 +378,10 @@ class ConnectedWindowTests(WindowTestCase):
         self.wait_for_result()
 
         self.assertEqual(copy.read_bytes(), source.read_bytes())
-        self.assertIn("Acorn sideways ROM, 16 KB", self.window._describe_file(copy))
+        self.assertEqual(
+            describe(open_rom(copy)),
+            f"Acorn sideways ROM, View, 16 KB, CRC-32 {crc32_text(source.read_bytes())}",
+        )
 
     def test_the_self_test_checks_that_the_socket_is_empty(self) -> None:
         self.window.start_action("hardware_check")
@@ -540,6 +577,36 @@ class GuideTests(GuideTestCase):
         self.assertIn("already byte-swapped", wizard.problem)
         self.assertFalse(wizard.reachable(BURN))
 
+    def test_a_refusal_is_not_still_showing_on_another_step(self) -> None:
+        wizard = self.open_guide()
+        wizard.choose_family(FAMILIES_BY_KEY["tos"])
+        wizard.choose_machine(LAYOUTS_BY_KEY["atari-st-six"], "six")
+        wizard.use_other_chip("W27C512@DIP28", 64 * KIB)
+        self.assertTrue(wizard.problem)
+
+        wizard.go_to(MACHINE)
+
+        self.assertEqual(wizard.problem, "")
+
+    def test_a_guide_that_has_been_replaced_gives_up_what_it_held(self) -> None:
+        # PyGObject cannot free a widget whose handlers refer back to it, so
+        # the old guide lingers. It must not keep the images and chips with it.
+        first = self.open_guide()
+        self.answer(first, "kickstart", "amiga-single", "A500", "M27C400@DIP40")
+        self.add(first, "kick31.rom", samples.kickstart())
+        first.go_to(BURN)
+        self.assertTrue(first.parts)
+
+        second = self.open_guide()
+
+        self.assertIsNot(second, first)
+        self.assertEqual(first.answers.images, [])
+        self.assertEqual(first.parts, ())
+        self.assertIsNone(first.get_parent())
+        # And it no longer hears from the window.
+        self.window._set_hardware_actions_enabled(False)
+        self.assertEqual(first.burn_buttons, [])
+
     def test_a_chip_from_the_full_list_must_be_the_size_the_board_needs(self) -> None:
         wizard = self.open_guide()
         wizard.choose_family(FAMILIES_BY_KEY["tos"])
@@ -712,6 +779,42 @@ class GuideBankTests(GuideTestCase):
             [rom.path.name for rom in wizard.answers.images], ["mos320.rom"]
         )
         self.assertFalse(wizard.add_image_button.get_sensitive())
+
+    def test_an_image_that_will_not_fit_is_refused_with_the_reason(self) -> None:
+        wizard = self.open_guide()
+        self.answer(wizard, "acorn-rom", "acorn-rom", "BBC Micro Model B", "2764@DIP28")
+
+        self.add(wizard, "basic.rom", samples.acorn_rom(16 * KIB, "BASIC"))
+
+        # Leaving it out without a word would look as though nothing happened.
+        self.assertEqual(wizard.answers.images, [])
+        self.assertIn("basic.rom is 16 KB", wizard.problem)
+        self.assertIn("8 KB chip", wizard.problem)
+
+        wizard.go_to(CHIP)
+        wizard.choose_chip(
+            next(c for c in wizard.answers.layout.chips if c.device == "SST39SF010A")
+        )
+        self.add(wizard, "view.rom", samples.acorn_rom(title="View"))
+        self.add(wizard, "mos320.rom", bytes(samples.filler(128 * KIB, 0x4D)))
+
+        self.assertEqual([rom.path.name for rom in wizard.answers.images], ["view.rom"])
+        self.assertIn("room for 112 KB more", wizard.problem)
+
+    def test_a_smaller_chip_says_which_images_it_dropped(self) -> None:
+        wizard = self.open_guide()
+        self.answer(wizard, "acorn-rom", "acorn-rom", "BBC Master", "W27C512@DIP28")
+        for title in ("A", "B", "C"):
+            self.add(wizard, f"{title}.rom", samples.acorn_rom(title=title))
+
+        wizard.go_to(CHIP)
+        wizard.choose_chip(
+            next(c for c in wizard.answers.layout.chips if c.device == "AT28C256")
+        )
+
+        self.assertEqual(
+            wizard.problem, "C.rom will not fit this chip and was removed."
+        )
 
     def test_an_image_can_be_removed(self) -> None:
         wizard = self.open_guide()

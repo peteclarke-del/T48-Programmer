@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import time
 import unittest
 from pathlib import Path
 from unittest import mock
@@ -70,6 +71,19 @@ class ParseProgressTests(unittest.TestCase):
         ):
             with self.subTest(line):
                 self.assertEqual(parse_progress(line).fraction, 1.0)
+
+    def test_a_line_of_nothing_but_dots_is_read_at_once(self) -> None:
+        # The regular expression this replaced took 17 seconds over this line.
+        line = "." * 24_000 + " OK"
+        started = time.perf_counter()
+
+        for _ in range(50):
+            parse_progress(line)
+            is_transient(line)
+
+        self.assertLess(time.perf_counter() - started, 0.5)
+        self.assertIsNone(parse_progress("... OK"))
+        self.assertIsNone(parse_progress("Reading Code...  OKAY"))
 
     def test_other_lines_are_not_progress(self) -> None:
         for line in (
@@ -216,6 +230,25 @@ class RunActionTests(unittest.TestCase):
         self.assertEqual(cancelled.summary, "Read Chip to File was cancelled.")
         self.assertFalse(hung.succeeded)
         self.assertIn("stopped responding", hung.summary)
+
+    def test_nothing_that_goes_wrong_is_allowed_to_escape_the_worker(self) -> None:
+        # The window learns that an operation is over only from the result. An
+        # exception lost in the thread would leave it on the progress page,
+        # refusing every command and refusing to close.
+        def runner(*_args: object, **_kwargs: object):
+            raise MemoryError("out of memory")
+
+        result = run_action(ACTIONS["read_id"], chip="AT28C256", runner=runner)
+
+        self.assertFalse(result.succeeded)
+        self.assertIn("stopped unexpectedly", result.summary)
+        self.assertIn("MemoryError", result.summary)
+
+        missing_file = run_action(
+            ACTIONS["write"], chip="AT28C256", runner=fake_runner([])
+        )
+        self.assertFalse(missing_file.succeeded)
+        self.assertIn("needs a file", missing_file.summary)
 
     def test_without_minipro_nothing_is_run(self) -> None:
         runner = fake_runner([])

@@ -7,14 +7,16 @@ merged streams, the exit statuses, and cancellation by signal.
 
 from __future__ import annotations
 
+import os
 import tempfile
 import threading
 import unittest
 from pathlib import Path
+from unittest import mock
 
 import support
 
-from t48_programmer import samples
+from t48_programmer import samples, simulator
 from t48_programmer.minipro import ACTIONS, Options
 from t48_programmer.operation import OperationController
 from t48_programmer.operations import Progress, run_action
@@ -125,6 +127,29 @@ class SimulatorTests(unittest.TestCase):
         self.assertIn("Logic test successful", logic.transcript)
         self.assertIn("completed successfully", hardware.transcript)
         self.assertIn("W25Q64JV@SOIC8", detected.transcript.splitlines())
+
+    def test_the_chips_are_kept_in_a_folder_of_the_users_own(self) -> None:
+        # A fixed name in /tmp could be made first by someone else, with a link
+        # in it for a write to the chip to follow.
+        with mock.patch.dict(os.environ, {"XDG_RUNTIME_DIR": str(self.folder)}):
+            os.environ.pop("T48_PROGRAMMER_SIMULATOR_STATE")
+            folder = simulator.state_folder()
+
+        self.assertEqual(folder.parent, self.folder)
+        self.assertTrue(folder.name.endswith(str(os.getuid())))
+        self.assertEqual(folder.stat().st_mode & 0o777, 0o700)
+
+    def test_a_state_folder_that_is_not_a_folder_is_refused(self) -> None:
+        planted = self.folder / "planted"
+        planted.symlink_to(self.folder)
+
+        with (
+            mock.patch.dict(
+                os.environ, {"T48_PROGRAMMER_SIMULATOR_STATE": str(planted)}
+            ),
+            self.assertRaises(SystemExit),
+        ):
+            simulator.state_folder()
 
     def test_an_unknown_chip_is_reported_by_name(self) -> None:
         result = run_action(ACTIONS["read_id"], chip="NOPE123")

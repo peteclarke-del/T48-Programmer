@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import os
 from importlib.resources import files
 
 import gi
@@ -13,8 +12,6 @@ from gi.repository import Adw, Gdk, Gio, GLib, Gtk  # noqa: E402
 
 from .branding import APPLICATION_ICON, APPLICATION_ID, APPLICATION_NAME  # noqa: E402
 from .window import MainWindow  # noqa: E402
-
-DOCUMENTATION_STATE_VARIABLE = "T48_PROGRAMMER_DOCUMENTATION_STATE"
 
 
 class ProgrammerApplication(Adw.Application):
@@ -55,8 +52,4 @@ class ProgrammerApplication(Adw.Application):
             return
         window = MainWindow(application=self)
         window.present()
-        documentation_state = os.environ.get(DOCUMENTATION_STATE_VARIABLE)
-        if documentation_state:
-            window.show_documentation_state(documentation_state)
-        else:
-            window.begin_programmer_detection()
+        window.begin_programmer_detection()

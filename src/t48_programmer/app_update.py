@@ -10,9 +10,12 @@ the package files, and an installed package records the name of its own file,
 with the version left as ``{version}``, in ``package-target`` beside the
 application. The update takes the file with that name from the newer release,
 so it installs the package made for the same distribution release and
-architecture. The package is downloaded to the cache folder, checked against
-``SHA256SUMS`` and installed with ``pkexec apt-get install``, which asks for
-the user's password. A copy run from the source tree, or installed from the
+architecture. The package is downloaded to the cache folder and checked against
+``SHA256SUMS``. It is installed by ``install-update``, a helper that the
+package puts beside the application and that pkexec runs as root once the user
+has given a password. The helper copies the package to a folder only root can
+write to, checks the copy against the same checksum, and gives the copy to apt,
+so the file that was checked is the file that is installed. A copy run from the source tree, or installed from the
 wheel, has no ``package-target`` and cannot update itself; the release page
 is offered instead.
 """
@@ -39,6 +42,8 @@ LATEST_URL = f"{RELEASES_API}/latest"
 SUMS_NAME = "SHA256SUMS"
 # The file packaging/package-target.sh writes beside the installed application.
 PACKAGE_TARGET = Path(__file__).resolve().parents[1] / "package-target"
+# The root-side installer, which build-deb.sh puts in the same place.
+INSTALL_HELPER = PACKAGE_TARGET.parent / "bin" / "install-update"
 VERSION_FIELD = "{version}"
 _TAG = re.compile(r"^v(\d+)\.(\d+)\.(\d+)$")
 _SUM_LINE = re.compile(r"^([0-9a-fA-F]{64})\s+\*?(\S.*)$")
@@ -72,6 +77,14 @@ class PackageTarget:
         return " ".join(
             part for part in (name.capitalize(), release, self.arch) if part
         )
+
+
+@dataclass(frozen=True, slots=True)
+class VerifiedPackage:
+    """A downloaded package and the SHA-256 that the release publishes for it."""
+
+    path: Path
+    sha256: str
 
 
 @dataclass(frozen=True, slots=True)
@@ -211,6 +224,13 @@ def download_folder() -> Path:
     return base / "t48-programmer" / "updates"
 
 
+def _discard_other_downloads(folder: Path, keep: Path) -> None:
+    """Remove packages left by earlier updates, which nothing else ever would."""
+    for old in folder.glob("*.deb"):
+        if old != keep:
+            old.unlink(missing_ok=True)
+
+
 def download(
     release: AppRelease,
     progress: Progress | None = None,
@@ -218,39 +238,60 @@ def download(
     *,
     folder: Path | None = None,
     opener: Opener | None = None,
-) -> Path:
-    """Download the release's package for this system and check it against SHA256SUMS."""
+) -> VerifiedPackage:
+    """Fetch the release's package for this system and check it against SHA256SUMS.
+
+    A package already in the folder that matches the published checksum is
+    used as it is. That is the case after a password prompt was dismissed, and
+    downloading it all again would be the wrong answer to pressing Update twice.
+    """
     if not release.installable:
         raise UpdateError(f"{release.name} has no package for this system.")
-    if cancel is not None and cancel.is_set():
-        raise UpdateCancelled("The update was cancelled.")
     folder = folder or download_folder()
+    target = folder / release.package_name
+
+    def stop_if_cancelled() -> None:
+        if cancel is not None and cancel.is_set():
+            raise UpdateCancelled("The update was cancelled.")
+
+    stop_if_cancelled()
     sums = releases.get_bytes(release.sums_url, max_bytes=64 * 1024, opener=opener)
+    stop_if_cancelled()
     expected = published_sum(sums.decode("utf-8", "replace"), release.package_name)
     if not expected:
         raise UpdateError(f"{SUMS_NAME} in {release.name} has no line for the package.")
-    package = releases.download(
-        release.package_url,
-        folder / release.package_name,
-        progress=progress,
-        cancel=cancel,
-        opener=opener,
-    )
-    if _sha256(package) != expected:
-        package.unlink(missing_ok=True)
-        raise UpdateError(
-            "The downloaded package does not match its published checksum, so it was not "
-            "installed. Try again."
+    if not (target.is_file() and _sha256(target) == expected):
+        releases.download(
+            release.package_url,
+            target,
+            progress=progress,
+            cancel=cancel,
+            opener=opener,
         )
-    return package
+        if _sha256(target) != expected:
+            target.unlink(missing_ok=True)
+            raise UpdateError(
+                "The downloaded package does not match its published checksum, so it "
+                "was not installed. Try again."
+            )
+    stop_if_cancelled()
+    _discard_other_downloads(folder, target)
+    return VerifiedPackage(target, expected)
 
 
-def install_command(package: Path) -> list[str] | None:
-    """The command that installs ``package`` with the user's password, or None without pkexec."""
-    pkexec, apt_get = shutil.which("pkexec"), shutil.which("apt-get")
-    if not (pkexec and apt_get):
+def install_command(
+    package: VerifiedPackage, helper: Path = INSTALL_HELPER
+) -> list[str] | None:
+    """The command that installs ``package`` as root, or None when it cannot be built.
+
+    The helper is given the checksum and checks it again as root, on a copy of
+    its own. Checking here alone would leave the gap between the check and the
+    install, which lasts for as long as the password prompt is open.
+    """
+    pkexec = shutil.which("pkexec")
+    if not (pkexec and helper.is_file()):
         return None
-    return [pkexec, apt_get, "install", "--yes", str(package)]
+    return [pkexec, str(helper), str(package.path), package.sha256]
 
 
 def manual_command(package: Path) -> str:
@@ -258,7 +299,12 @@ def manual_command(package: Path) -> str:
     return f"sudo apt install {shlex.quote(str(package))}"
 
 
-def install(package: Path, *, run: Callable[..., Any] = subprocess.run) -> None:
+def install(
+    package: VerifiedPackage,
+    *,
+    run: Callable[..., Any] = subprocess.run,
+    helper: Path = INSTALL_HELPER,
+) -> None:
     """Install the downloaded package, then remove the download.
 
     Raises UpdateCancelled when the password prompt is dismissed, and
@@ -269,11 +315,12 @@ def install(package: Path, *, run: Callable[..., Any] = subprocess.run) -> None:
     cannot stop it: giving up would report a failure while apt went on to
     install the package.
     """
-    command = install_command(package)
-    by_hand = f"Install it in a terminal with: {manual_command(package)}"
+    command = install_command(package, helper)
+    by_hand = f"Install it in a terminal with: {manual_command(package.path)}"
     if command is None:
         raise UpdateError(
-            f"pkexec is not installed, so the package cannot be installed here. {by_hand}"
+            "pkexec or the package's installer is missing, so the package cannot be "
+            f"installed here. {by_hand}"
         )
     try:
         result = run(command, capture_output=True, text=True, check=False)
@@ -292,7 +339,9 @@ def install(package: Path, *, run: Callable[..., Any] = subprocess.run) -> None:
             line for line in (result.stderr or result.stdout or "").splitlines() if line
         ]
         reason = (
-            lines[-1] if lines else f"apt-get stopped with status {result.returncode}"
+            lines[-1]
+            if lines
+            else f"the installer stopped with status {result.returncode}"
         )
         raise UpdateError(f"The package could not be installed: {reason}. {by_hand}")
-    package.unlink(missing_ok=True)
+    package.path.unlink(missing_ok=True)

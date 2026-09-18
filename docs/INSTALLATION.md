@@ -35,8 +35,10 @@ alone and the two do not conflict.
 
 Choose **Help, Check for Application Updates**. When GitHub has a newer release,
 **Update to** downloads the package made for the same system as the installed
-one, checks it against the release's `SHA256SUMS`, and installs it with
-`pkexec apt-get install` after the system asks for your password. It then
+one, checks it against the release's `SHA256SUMS`, and installs it after the
+system asks for your password. The installing is done by a small helper that
+runs as root, checks the package again on a copy only root can touch, and hands
+that copy to apt. It then
 offers to restart the application. The check sends one request to
 api.github.com, and only when you ask. No update is installed while a chip is
 being read or written.

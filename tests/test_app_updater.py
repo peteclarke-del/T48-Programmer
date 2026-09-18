@@ -10,46 +10,41 @@ skipping these tests without anyone noticing. Every wait is bounded.
 
 from __future__ import annotations
 
-import os
 import sys
+import threading
 import time
 import unittest
 from dataclasses import replace
 from pathlib import Path
 from unittest import mock
 
-REQUIRE_GTK = bool(os.environ.get("T48_PROGRAMMER_REQUIRE_GTK"))
-
-try:
-    from gtk_support import shared_application  # isort: skip
-    import gi
-except ImportError as error:
-    if REQUIRE_GTK:
-        raise
-    raise unittest.SkipTest(f"PyGObject is not installed: {error}") from error
-
-gi.require_version("Gtk", "4.0")
-gi.require_version("Adw", "1")
-from gi.repository import Adw, Gdk, GLib, Gtk  # noqa: E402
+from gtk_support import (  # isort: skip
+    HAVE_DISPLAY,
+    pump,
+    shared_application,
+    wait_until,
+)
+from gi.repository import Adw, GLib, Gtk  # noqa: E402
 
 from t48_programmer import __version__  # noqa: E402
-from t48_programmer.app_update import AppRelease, PackageTarget  # noqa: E402
+from t48_programmer.app_update import (  # noqa: E402
+    AppRelease,
+    PackageTarget,
+    VerifiedPackage,
+)
 from t48_programmer.app_updater import (  # noqa: E402
     BUSY_WHILE_RUNNING,
     CHECK_LABEL,
     RESTART_WHILE_RUNNING,
     AppUpdateControls,
     AppUpdater,
+    AppUpdateState,
     UpdateService,
 )
 from t48_programmer.operation import OperationController  # noqa: E402
 from t48_programmer.releases import UpdateCancelled, UpdateError  # noqa: E402
 from t48_programmer.window import MainWindow  # noqa: E402
 
-HAVE_DISPLAY = bool(Gtk.init_check()) and Gdk.Display.get_default() is not None
-if REQUIRE_GTK and not HAVE_DISPLAY:
-    raise RuntimeError("The interface tests need a display.")
-TIMEOUT = 10.0
 UBUNTU = PackageTarget(
     "ubuntu24.04", "amd64", "T48-Programmer_{version}_ubuntu24.04_amd64.deb"
 )
@@ -64,24 +59,6 @@ NEWER = AppRelease(
     package_size=24_000_000,
     sums_url="https://example.org/SHA256SUMS",
 )
-
-
-def wait_until(predicate, message: str, timeout: float = TIMEOUT) -> None:
-    context = GLib.MainContext.default()
-    deadline = time.monotonic() + timeout
-    while time.monotonic() < deadline:
-        while context.pending():
-            context.iteration(False)
-        if predicate():
-            return
-        time.sleep(0.01)
-    raise AssertionError(f"Timed out waiting: {message}")
-
-
-def pump() -> None:
-    context = GLib.MainContext.default()
-    while context.pending():
-        context.iteration(False)
 
 
 def widgets_in(widget: Gtk.Widget) -> list[Gtk.Widget]:
@@ -133,9 +110,9 @@ class FakeService(UpdateService):
                 raise UpdateCancelled("The update was cancelled.")
             progress(step * 1000, 10_000)
             time.sleep(self.step_delay)
-        return Path("/nonexistent") / release.package_name
+        return VerifiedPackage(Path("/nonexistent") / release.package_name, "0" * 64)
 
-    def install(self, package: Path) -> None:
+    def install(self, package: VerifiedPackage) -> None:
         if self.install_dismissed:
             raise UpdateCancelled(
                 "The password prompt was dismissed, so nothing was installed."
@@ -146,7 +123,9 @@ class FakeService(UpdateService):
 
 
 @unittest.skipUnless(HAVE_DISPLAY, "needs a display")
-class AboutUpdateTests(unittest.TestCase):
+class UpdateTestCase(unittest.TestCase):
+    """A real window whose update work is done by FakeService."""
+
     def setUp(self) -> None:
         self.app = shared_application()
         self.window = MainWindow(application=self.app)
@@ -191,6 +170,9 @@ class AboutUpdateTests(unittest.TestCase):
         self.assertEqual(open_dialogs(), [])
         return dialog
 
+
+@unittest.skipUnless(HAVE_DISPLAY, "needs a display")
+class AboutUpdateTests(UpdateTestCase):
     def test_the_about_window_has_the_update_button_under_the_version(self) -> None:
         controls = self.about_controls()
         version = controls.get_prev_sibling()
@@ -249,7 +231,8 @@ class AboutUpdateTests(unittest.TestCase):
         self.assertIn("Reads more formats.", question.get_body())
         self.wait_update("installed")
         self.assertEqual(
-            [path.name for path in self.service.installed], [NEWER.package_name]
+            [package.path.name for package in self.service.installed],
+            [NEWER.package_name],
         )
         self.assertEqual(
             controls.status.get_text(),
@@ -396,6 +379,98 @@ class AboutUpdateTests(unittest.TestCase):
         self.assertFalse(self.app.restart_requested)
         self.assertEqual(controls.status.get_text(), RESTART_WHILE_RUNNING)
         self.window._active_operation = None
+
+
+@unittest.skipUnless(HAVE_DISPLAY, "needs a display")
+class UpdateSafetyTests(UpdateTestCase):
+    """What the review found: the rule must hold at the install, not just the start."""
+
+    def start_download(self):
+        """Begin a download slow enough to act on, and return About's controls."""
+        self.service.release = NEWER
+        self.service.step_delay = 0.2
+        controls = self.about_controls()
+        controls.button.emit("clicked")
+        self.wait_update("available")
+        self.window.app_updater.install(NEWER)
+        self.wait_update("downloading")
+        return controls
+
+    def test_an_operation_started_during_the_download_stops_the_install(self) -> None:
+        self.start_download()
+        self.window._active_operation = OperationController()
+
+        self.wait_update("available")
+
+        self.assertEqual(self.window.app_updater.state.message, BUSY_WHILE_RUNNING)
+        self.assertEqual(self.service.installed, [])
+        self.window._active_operation = None
+
+    def test_a_cancel_that_arrives_as_the_download_ends_is_still_a_cancel(self) -> None:
+        # The download is polled for a cancel between blocks only, so one that
+        # is pressed after the last block reaches the updater with a finished
+        # package in hand. It must not go on to ask for a password.
+        finished = self.service.download
+
+        def finish_then_cancel(release, progress, cancel):
+            package = finished(release, progress, threading.Event())
+            cancel.set()
+            return package
+
+        self.service.download = finish_then_cancel
+
+        self.window.app_updater.install(NEWER)
+
+        wait_until(
+            lambda: (
+                self.window.app_updater.state.message == "The update was cancelled."
+            ),
+            "the late cancel",
+        )
+        self.assertEqual(self.window.app_updater.state.phase, "available")
+        self.assertEqual(self.service.installed, [])
+
+    def test_cancel_answers_at_once(self) -> None:
+        controls = self.start_download()
+
+        self.window.app_updater.cancel()
+
+        self.assertTrue(self.window.app_updater.state.cancelling)
+        self.assertEqual(controls.status.get_text(), "Cancelling the download")
+        self.assertFalse(controls.cancel_button.get_sensitive())
+        self.wait_update("available")
+
+    def test_an_installed_update_is_not_offered_again(self) -> None:
+        self.window.app_updater._set(AppUpdateState("installed", "done", release=NEWER))
+
+        self.window.app_updater.check()
+        pump()
+
+        self.assertEqual(self.window.app_updater.state.phase, "installed")
+        self.assertEqual(self.service.checks, 0)
+
+    def test_no_chip_operation_starts_while_apt_replaces_minipro(self) -> None:
+        self.window.app_updater._set(AppUpdateState("installing", release=NEWER))
+        self.window._programmer = replace(self.window._programmer, connected=True)
+
+        self.window.start_action("hardware_check")
+
+        self.assertIsNone(self.window.last_dialog)
+        self.assertIsNone(self.window._active_operation)
+
+    def test_the_controls_get_a_window_when_about_has_no_place_for_them(self) -> None:
+        with mock.patch("t48_programmer.window.attach_to_about", return_value=False):
+            self.window.activate_action("win.about", None)
+            wait_until(lambda: self.window.about_window is not None, "About")
+
+        titles = [w.get_title() for w in Gtk.Window.list_toplevels() if w.get_visible()]
+        self.assertIn("Application Updates", titles)
+        self.assertIn(
+            "no place for the update controls", self.window._diagnostic_log[-1]
+        )
+        for window in Gtk.Window.list_toplevels():
+            if window.get_title() == "Application Updates":
+                window.destroy()
 
 
 @unittest.skipUnless(HAVE_DISPLAY, "needs a display")

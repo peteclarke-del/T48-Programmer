@@ -15,6 +15,8 @@ jobs:
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
 
       - uses: actions/setup-python@v7
         with:
@@ -57,8 +59,7 @@ jobs:
       - name: Validate sources and metadata
         run: |
           python -m compileall -q src tests tools
-          bash -n t48-programmer packaging/*.sh
-          sh -n packaging/t48-programmer packaging/postinst packaging/postrm
+          packaging/check-scripts.sh
           desktop-file-validate data/com.github.pclarke.T48Programmer.desktop
           appstreamcli validate --no-net data/com.github.pclarke.T48Programmer.metainfo.xml
 
@@ -71,6 +72,8 @@ jobs:
       contents: write
     steps:
       - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
 
       - uses: actions/setup-python@v7
         with:
@@ -81,7 +84,7 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y build-essential pkg-config libusb-1.0-0-dev zlib1g-dev
-          python -m pip install build
+          python -m pip install build==1.2.2
 
       - name: Build wheel and Ubuntu installer
         run: |
@@ -105,6 +108,8 @@ jobs:
         run: |
           sudo apt-get install -y ./dist/*.deb
           test -x /usr/bin/t48-programmer
+          # The update installer runs as root, so nobody else may change it.
+          test "$(stat -c '%U %a' /usr/lib/t48-programmer/bin/install-update)" = "root 755"
           # The bundled minipro must find the chip database it was built for.
           /usr/lib/t48-programmer/bin/minipro --version 2>&1 \
             | grep -F "/usr/lib/t48-programmer/share/minipro"

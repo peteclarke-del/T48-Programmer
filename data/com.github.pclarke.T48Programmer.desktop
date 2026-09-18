@@ -1,0 +1,11 @@
+[Desktop Entry]
+Name=T48 Programmer
+GenericName=Chip Programmer
+Comment=Read, write and verify EPROMs, EEPROMs and flash with an XGecu programmer
+Exec=t48-programmer
+Icon=com.github.pclarke.T48Programmer
+Terminal=false
+Type=Application
+Categories=Utility;Electronics;
+Keywords=EPROM;EEPROM;flash;ROM;minipro;XGecu;TL866;T48;Kickstart;TOS;
+StartupNotify=true

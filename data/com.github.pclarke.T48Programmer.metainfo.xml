@@ -1,0 +1,37 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<component type="desktop-application">
+  <id>com.github.pclarke.T48Programmer</id>
+  <name>T48 Programmer</name>
+  <summary>Program EPROMs, EEPROMs and flash with an XGecu T48</summary>
+  <metadata_license>CC0-1.0</metadata_license>
+  <project_license>GPL-3.0-or-later</project_license>
+  <developer id="github.com.peteclarke-del">
+    <name>Pete Clarke</name>
+  </developer>
+  <url type="homepage">https://github.com/peteclarke-del/T48-Programmer</url>
+  <url type="bugtracker">https://github.com/peteclarke-del/T48-Programmer/issues</url>
+  <launchable type="desktop-id">com.github.pclarke.T48Programmer.desktop</launchable>
+  <description>
+    <p>
+      A native GNOME interface for the XGecu T48 chip programmer, built on
+      minipro. It reads, writes, verifies, erases and blank checks every chip
+      minipro supports, identifies Amiga Kickstart, Atari TOS and Acorn ROM
+      images before they are written, and guides a ROM from the image to
+      verified chips by splitting, byte-swapping and filling it for the chips
+      of a particular board.
+    </p>
+  </description>
+  <content_rating type="oars-1.1" />
+  <releases>
+    <release version="0.1.0" date="2026-09-18">
+      <description>
+        <ul>
+          <li>Read, write, verify, blank check and erase any chip in the minipro database, with every minipro option available.</li>
+          <li>Identify Kickstart, TOS and Acorn sideways ROM images, including a Kickstart checksum test.</li>
+          <li>A guided ROM burn for Amiga Kickstart, Atari TOS and Acorn ROMs, with several Acorn ROMs to a chip and support for encrypted Amiga Forever Kickstarts.</li>
+          <li>Test logic ICs and static RAM, read chip IDs, detect SPI flash, and run the programmer self test.</li>
+        </ul>
+      </description>
+    </release>
+  </releases>
+</component>

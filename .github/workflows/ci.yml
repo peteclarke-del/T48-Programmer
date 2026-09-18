@@ -1,0 +1,109 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    name: Python tests and source checks
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install metadata validators
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y appstream desktop-file-utils
+
+      - name: Install project
+        run: python -m pip install --no-deps --editable . ruff==0.16.4
+
+      - name: Check Python style
+        run: |
+          ruff check src tests tools
+          ruff format --check src tests tools
+
+      # The interface tests skip themselves here, where there is no GTK. The
+      # interface job below runs them and fails if it cannot.
+      - name: Run tests
+        run: python -W error::ResourceWarning -m unittest discover -s tests -v
+
+      - name: Compile Python sources
+        run: python -m compileall -q src tests tools
+
+      - name: Check script syntax
+        run: |
+          bash -n t48-programmer packaging/build-deb.sh
+          sh -n packaging/t48-programmer packaging/postinst packaging/postrm
+
+      - name: Validate desktop metadata
+        run: |
+          desktop-file-validate data/com.github.pclarke.T48Programmer.desktop
+          appstreamcli validate --no-net data/com.github.pclarke.T48Programmer.metainfo.xml
+
+  interface:
+    name: Interface tests
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v7
+
+      # PyGObject, GTK 4 and libadwaita come from the distribution and not from
+      # pip, so this job uses Ubuntu's own Python and the libadwaita that the
+      # package is installed with.
+      - name: Install GTK and the display server
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y python3-gi gir1.2-gtk-4.0 gir1.2-adw-1 \
+            xvfb dbus-daemon
+
+      - name: Run tests with the interface
+        env:
+          PYTHONPATH: src
+          # Fail rather than skip the interface tests if GTK cannot be used.
+          T48_PROGRAMMER_REQUIRE_GTK: "1"
+          GSK_RENDERER: cairo
+        run: >-
+          dbus-run-session -- xvfb-run --auto-servernum
+          /usr/bin/python3 -W error::ResourceWarning -m unittest discover -s tests -v
+
+  package:
+    name: Debian package
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Install build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential pkg-config libusb-1.0-0-dev \
+            zlib1g-dev python3-pip
+
+      - name: Build the package
+        run: packaging/build-deb.sh dist
+
+      - name: Check the bundled minipro finds its database
+        run: |
+          dpkg-deb -x dist/*.deb unpacked
+          unpacked/usr/lib/t48-programmer/bin/minipro --version 2>&1 \
+            | grep -F "/usr/lib/t48-programmer/share/minipro"
+
+      - name: Check the udev rules
+        run: udevadm verify packaging/60-t48-programmer.rules
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: debian-package
+          path: dist/*.deb

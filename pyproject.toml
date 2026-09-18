@@ -1,0 +1,39 @@
+[build-system]
+requires = ["setuptools>=69"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "t48-programmer"
+dynamic = ["version"]
+description = "A native GNOME interface for the XGecu T48 chip programmer, built on minipro"
+readme = "README.md"
+requires-python = ">=3.10"
+license = "GPL-3.0-or-later"
+# PyGObject, GTK 4 and libadwaita come from the distribution, and minipro is a
+# separate program found on PATH, so there is nothing for pip to fetch.
+dependencies = []
+
+[project.gui-scripts]
+t48-programmer = "t48_programmer.__main__:main"
+
+[tool.setuptools]
+package-dir = { "" = "src" }
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+# The icon is package data so that an install from a wheel carries it.
+[tool.setuptools.package-data]
+t48_programmer = ["data/icons/hicolor/*/apps/*.svg"]
+
+# One statement of the version, in the package itself, so that the packaging
+# and the About window cannot disagree about which release this is.
+[tool.setuptools.dynamic]
+version = { attr = "t48_programmer.__version__" }
+
+[tool.ruff]
+target-version = "py310"
+line-length = 88
+
+[tool.ruff.lint]
+select = ["F", "I", "UP", "B", "SIM", "C4", "PIE", "PERF"]

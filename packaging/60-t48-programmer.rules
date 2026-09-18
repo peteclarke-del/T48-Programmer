@@ -1,0 +1,28 @@
+# Access to XGecu chip programmers for the person at the keyboard.
+#
+# The USB identities are those in minipro's own udev rules, which are part of
+# the minipro project and distributed under the GNU General Public License,
+# version 3 or later. minipro 0.7.4 splits them across three files, one to
+# mark the device and two to grant access. They are kept in one file here so
+# that the package cannot install the mark without the permission.
+#
+# "uaccess" grants access to whoever is logged in at the machine, through
+# systemd-logind. The group is for systems without logind, where the user must
+# belong to plugdev. A rule that sets uaccess has to sort before
+# 73-seat-late.rules, which is why this file is numbered 60.
+#
+# Replug the programmer after installing this file.
+
+ACTION!="add|change", GOTO="t48_programmer_rules_end"
+SUBSYSTEM!="usb", GOTO="t48_programmer_rules_end"
+
+# TL866A and TL866CS
+ATTRS{idVendor}=="04d8", ATTRS{idProduct}=="e11c", TAG+="uaccess", MODE="660", GROUP="plugdev"
+
+# TL866II+, T48 and T56, which share one identity
+ATTRS{idVendor}=="a466", ATTRS{idProduct}=="0a53", TAG+="uaccess", MODE="660", GROUP="plugdev"
+
+# T76
+ATTRS{idVendor}=="a466", ATTRS{idProduct}=="1a86", TAG+="uaccess", MODE="660", GROUP="plugdev"
+
+LABEL="t48_programmer_rules_end"

@@ -103,6 +103,19 @@ _OFFLINE_WITHOUT_MINIPRO = (
 )
 
 
+def _to_main_loop(callback: Callable[..., bool], *arguments: object) -> None:
+    """Hand a result from a worker thread to the GTK thread.
+
+    GLib.idle_add is the usual way, but its default priority is the lowest in
+    the main loop, below redrawing. On a display with no frame pacing, such as
+    Xvfb or a slow remote session, an animated spinner keeps the loop busy with
+    redraws for ever, and an idle callback never runs. The window then sits on
+    "Looking for the programmer" with the answer waiting behind it. Results are
+    not idle work, so they are queued at the default priority.
+    """
+    GLib.idle_add(callback, *arguments, priority=GLib.PRIORITY_DEFAULT)
+
+
 class MainWindow(Adw.ApplicationWindow):
     """The start page, and the pages that replace it while work is done."""
 
@@ -729,10 +742,10 @@ class MainWindow(Adw.ApplicationWindow):
                 chip=self.chip,
                 path=path,
                 options=options,
-                on_progress=lambda update: GLib.idle_add(self._update_progress, update),
+                on_progress=lambda update: _to_main_loop(self._update_progress, update),
                 controller=controller,
             )
-            GLib.idle_add(self._finish_action, result, path, on_finished)
+            _to_main_loop(self._finish_action, result, path, on_finished)
 
         threading.Thread(
             target=worker, name=f"minipro-{action.key}", daemon=True
@@ -1001,7 +1014,7 @@ class MainWindow(Adw.ApplicationWindow):
         def worker() -> None:
             result = detector()
             version = self._tool_version or tool_version()
-            GLib.idle_add(self._finish_programmer_detection, result, version, silent)
+            _to_main_loop(self._finish_programmer_detection, result, version, silent)
 
         threading.Thread(
             target=worker, name="programmer-detection", daemon=True

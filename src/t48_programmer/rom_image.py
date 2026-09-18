@@ -300,6 +300,21 @@ def is_text_format(identity: ImageIdentity) -> bool:
     return identity.kind in ("ihex", "srec")
 
 
+def copies_to_fill(image_bytes: int, chip_bytes: int, identity: ImageIdentity) -> int:
+    """How many times the image goes into the chip exactly, or 0 if it does not.
+
+    A ROM smaller than its chip often has to be repeated to fill it, because
+    the machine reads whichever part of the chip its spare address pins select.
+    A BBC Micro reads the top half of a 32 KB chip, so a 16 KB ROM written once
+    at the bottom is never seen. That only makes sense when the image divides
+    into the chip a whole number of times, and only for a raw image, since the
+    length of a HEX file says nothing about the data in it.
+    """
+    if is_text_format(identity) or not 0 < image_bytes < chip_bytes:
+        return 0
+    return chip_bytes // image_bytes if chip_bytes % image_bytes == 0 else 0
+
+
 def fit_text(image_bytes: int, chip_bytes: int, identity: ImageIdentity) -> str:
     """One sentence on whether the image fills the chip, or "" when unknown."""
     if is_text_format(identity):

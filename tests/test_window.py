@@ -211,6 +211,91 @@ class ConnectedWindowTests(WindowTestCase):
         self.assertEqual(self.page, "dashboard")
         self.assertIsNone(self.window.last_result)
 
+    def short_image(self) -> bytes:
+        rom = samples.acorn_rom(16 * KIB, "Micro-C")
+        self.window.set_chip("AT28C256")
+        self.window.load_image(self.image("micro-c.bin", rom))
+        return rom
+
+    def read_chip(self) -> bytes:
+        copy = self.folder / "readback.bin"
+        self.window.run_action(ACTIONS["read"], copy)
+        self.wait_for_result()
+        return copy.read_bytes()
+
+    def test_a_short_image_that_divides_into_the_chip_offers_to_fill_it(self) -> None:
+        self.short_image()
+
+        self.window.start_action("write")
+        dialog = self.window.last_dialog
+
+        self.assertIn("The image is 16 KB and the chip holds 32 KB.", dialog.get_body())
+        self.assertIn("writes the image twice", dialog.get_body())
+        self.assertIn("BBC Micro", dialog.get_body())
+        for response in ("cancel", "once", "fill"):
+            with self.subTest(response):
+                self.assertTrue(dialog.has_response(response))
+        self.assertEqual(dialog.get_default_response(), "cancel")
+        self.respond("cancel")
+        self.assertIsNone(self.window.last_result)
+
+    def test_filling_writes_the_image_twice_and_makes_that_the_current_image(
+        self,
+    ) -> None:
+        rom = self.short_image()
+
+        self.window.start_action("write")
+        self.respond("fill")
+        self.wait_for_result()
+
+        self.assertTrue(self.window.last_result.succeeded)
+        self.assertIn("Verification OK", self.window.last_result.transcript)
+        self.assertEqual(self.window.image_path.name, "micro-c-x2.bin")
+        self.assertEqual(self.window.image_path.read_bytes(), rom * 2)
+        self.assertIn("Fits the chip exactly.", self.window._image_row.get_subtitle())
+        self.assertEqual(self.read_chip(), rom * 2)
+
+        # Verify now compares the whole chip, and a second write asks nothing more.
+        self.window.show_dashboard()
+        self.window.start_action("verify")
+        self.wait_for_result()
+        self.assertTrue(self.window.last_result.succeeded)
+        self.window.start_action("write")
+        self.assertFalse(self.window.last_dialog.has_response("fill"))
+        self.respond("cancel")
+
+    def test_writing_once_is_allowed_without_finding_the_option_first(self) -> None:
+        rom = self.short_image()
+
+        self.window.start_action("write")
+        self.respond("once")
+        self.wait_for_result()
+
+        self.assertTrue(
+            self.window.last_result.succeeded, self.window.last_result.summary
+        )
+        self.assertIn(
+            "Warning: Incorrect file size", self.window.last_result.transcript
+        )
+        self.assertEqual(self.window.image_path.name, "micro-c.bin")
+        chip = self.read_chip()
+        self.assertEqual(chip[: 16 * KIB], rom)
+        self.assertEqual(chip[16 * KIB :], b"\xff" * 16 * KIB)
+
+    def test_an_image_that_does_not_divide_into_the_chip_is_offered_nothing(
+        self,
+    ) -> None:
+        self.window.set_chip("AT28C256")
+        self.window.load_image(
+            self.image("odd.bin", bytes(samples.filler(24 * KIB, 9)))
+        )
+
+        self.window.start_action("write")
+
+        self.assertFalse(self.window.last_dialog.has_response("fill"))
+        self.assertTrue(self.window.last_dialog.has_response("confirm"))
+        self.respond("cancel")
+
     def test_a_confirmed_write_runs_to_a_verified_result(self) -> None:
         self.window.set_chip("AT28C256")
         self.window.load_image(self.image("basic.rom", samples.filler(32 * KIB, 3)))

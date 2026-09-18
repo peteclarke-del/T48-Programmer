@@ -91,7 +91,10 @@ With three images in a 64 KB chip the top bank is empty, and a plain socket
 would see nothing. The guide shows the bank map so that this is visible before
 the chip is burned.
 
-In the table this is `bank_bytes`.
+In the table this is `bank_bytes`. `bank_spans()` gives the first bank and the
+number of banks each image takes, which is what the guide shows beside each
+image and what decides when the chip is full. It is not the image's place in
+the list, because an image can take more than one bank.
 
 ## Boards
 

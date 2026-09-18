@@ -1181,7 +1181,7 @@ class MainWindow(Adw.ApplicationWindow):
             self.wizard.choose_machine(pair, "A1200")
             self.wizard.choose_chip(pair.chips[0])
             self.wizard.go_to(BURN)
-        elif state == "guide-banks":
+        elif state in ("guide-banks", "guide-images"):
             self.open_rom_wizard()
             acorn = LAYOUTS_BY_KEY["acorn-rom"]
             self.wizard.choose_family(FAMILIES_BY_KEY[acorn.family])
@@ -1193,7 +1193,8 @@ class MainWindow(Adw.ApplicationWindow):
                 rom = self._scratch_folder() / f"{title.lower()}.rom"
                 rom.write_bytes(samples.acorn_rom(title=title))
                 self.wizard.add_image(open_rom(rom))
-            self.wizard.go_to(BURN)
+            if state == "guide-banks":
+                self.wizard.go_to(BURN)
         elif state == "app-update":
             # The About window after Check for Application Updates found the next
             # minor version. Nothing is fetched from GitHub.

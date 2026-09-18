@@ -7,7 +7,8 @@
 - Image identification for Kickstart, TOS and Acorn ROMs.
 - A guided ROM burn with breadcrumbs for Amiga Kickstart, Atari TOS in six
   chips or two, and Acorn ROMs in chips from 8 KB to 256 KB.
-- Several Acorn ROMs in one chip, in 16 KB banks, with a bank map.
+- Several Acorn ROMs in one chip, in 16 KB banks, with a bank map, reordered by
+  dragging or with the keyboard.
 - Encrypted Amiga Forever Kickstarts, decrypted with rom.key.
 - Logic and RAM tests, chip ID, SPI flash detection, programmer self test.
 - Offline mode.
@@ -30,13 +31,11 @@
    splits it. Taking a file per chip as well means deciding which file is HI,
    and a wrong guess burns a set that does not boot, so it needs a careful
    design and not a filename convention.
-4. **Reordering banks** by dragging, where today an image is removed and added
-   again.
-5. **Compare two images.** Show the first difference and the count, for
+4. **Compare two images.** Show the first difference and the count, for
    deciding between two reads of a doubtful chip.
-6. **Read twice and compare**, as one command, for old EPROMs.
-7. **A hex view** of the open image.
-8. **Fuse editing** for microcontrollers. minipro exchanges fuses as a text
+5. **Read twice and compare**, as one command, for old EPROMs.
+6. **A hex view** of the open image.
+7. **Fuse editing** for microcontrollers. minipro exchanges fuses as a text
    file, which the application can already read and write. An editor with the
    fuse names is a better interface than a file chooser.
 

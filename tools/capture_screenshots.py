@@ -89,6 +89,10 @@ def main() -> int:
             "08-guide-banks",
             lambda window: window.show_documentation_state("guide-banks"),
         ),
+        (
+            "10-guide-images",
+            lambda window: window.show_documentation_state("guide-images"),
+        ),
         ("03-result", lambda window: window.show_documentation_state("result")),
         ("04-choose-chip", open_chooser),
         ("05-help", lambda window: window.show_documentation_state("help")),

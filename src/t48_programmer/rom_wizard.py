@@ -20,8 +20,9 @@ import gi
 
 gi.require_version("Gtk", "4.0")
 gi.require_version("Adw", "1")
-from gi.repository import Adw, Gio, GObject, Gtk  # noqa: E402
+from gi.repository import Adw, Gdk, Gio, GObject, Gtk  # noqa: E402
 
+from .main_loop import call_on_main_loop  # noqa: E402
 from .operations import OperationResult  # noqa: E402
 from .rom_image import OpenedRom, fingerprint, identify, size_text  # noqa: E402
 from .rom_sets import (  # noqa: E402
@@ -31,6 +32,7 @@ from .rom_sets import (  # noqa: E402
     RomLayout,
     RomPart,
     RomSetError,
+    bank_spans,
     join_banks,
     layouts_in,
     prepare,
@@ -256,11 +258,38 @@ class RomWizard(Gtk.Box):
         del self.answers.images[index]
         self.go_to(IMAGES)
 
+    def move_image(self, index: int, to: int) -> None:
+        """Move an image to another place in the order, and so to another bank."""
+        images = self.answers.images
+        if index != to and 0 <= index < len(images) and 0 <= to < len(images):
+            images.insert(to, images.pop(index))
+        self.go_to(IMAGES)
+        # The page was rebuilt. Put the keyboard back on the arrow that was
+        # pressed, on the row in its new place, so it can be pressed again. At
+        # the end of the list that arrow is disabled, and the other one is used.
+        step = 1 if to > index else -1
+        for arrow in (self.arrows.get((to, step)), self.arrows.get((to, -step))):
+            if arrow is not None and arrow.get_sensitive():
+                arrow.grab_focus()
+                break
+
+    def spans(self) -> list[tuple[int, int]]:
+        return bank_spans(
+            self.answers.layout,
+            self.answers.option,
+            [rom.byte_count for rom in self.answers.images],
+        )
+
+    def banks_used(self) -> int:
+        return sum(count for _first, count in self.spans())
+
     def bank_count(self) -> int:
         return self.answers.layout.bank_count(self.answers.option)
 
     def _trim_images(self) -> None:
-        del self.answers.images[self.bank_count() :]
+        """Drop images from the end until what is left fits the chip."""
+        while self.answers.images and self.banks_used() > self.bank_count():
+            self.answers.images.pop()
 
     # Preparing and burning
 
@@ -401,7 +430,8 @@ class RomWizard(Gtk.Box):
                 f"This chip holds up to {banks} images of "
                 f"{size_text(layout.bank_bytes)}, the first in the lowest bank. One "
                 "image alone is repeated into every bank and works in any socket. "
-                "Add more only if the board can select a bank."
+                "Add more only if the board can select a bank. Drag an image, or "
+                "use its arrows, to move it to another bank."
             )
         elif len(layout.lanes) > 1:
             description = (
@@ -413,7 +443,7 @@ class RomWizard(Gtk.Box):
         group = Adw.PreferencesGroup(
             title="ROM Images" if banks > 1 else "ROM Image", description=description
         )
-        full = len(self.answers.images) >= banks
+        full = self.banks_used() >= banks
         add = Gtk.Button(
             label="Add Another Image…"
             if self.answers.images and banks > 1
@@ -425,14 +455,27 @@ class RomWizard(Gtk.Box):
         add.connect("clicked", lambda _button: self._host.choose_rom(self.add_image))
         group.set_header_suffix(add)
         self.add_image_button = add
-        for index, rom in enumerate(self.answers.images):
+        self.image_rows: list[Adw.ActionRow] = []
+        self.arrows: dict[tuple[int, int], Gtk.Button] = {}
+        last = len(self.answers.images) - 1
+        for index, (rom, (first, count)) in enumerate(
+            zip(self.answers.images, self.spans(), strict=True)
+        ):
             row = _row(
                 rom.path.name,
                 f"{rom.identity.label}, {size_text(rom.byte_count)}",
                 activatable=False,
             )
+            self.image_rows.append(row)
             if banks > 1:
-                row.add_prefix(Gtk.Label(label=f"Bank {index}"))
+                where = (
+                    f"Bank {first}"
+                    if count == 1
+                    else f"Banks {first} to {first + count - 1}"
+                )
+                row.add_prefix(Gtk.Label(label=where, width_chars=12, xalign=0))
+            if last > 0:
+                self._make_movable(row, index, last)
             remove = Gtk.Button(
                 icon_name="user-trash-symbolic",
                 valign=Gtk.Align.CENTER,
@@ -447,6 +490,54 @@ class RomWizard(Gtk.Box):
         if not self.answers.images:
             group.add(_text_row("No image chosen yet."))
         return self._page(group)
+
+    def _make_movable(self, row: Adw.ActionRow, index: int, last: int) -> None:
+        """Let a row be dragged onto another, or moved with its arrows.
+
+        Dragging carries the row's place in the list, and dropping it on a row
+        moves it to that row's place. The arrows do the same one step at a
+        time, for the keyboard and for anyone who would sooner not drag.
+        """
+        row.add_prefix(Gtk.Image(icon_name="list-drag-handle-symbolic"))
+        source = Gtk.DragSource(actions=Gdk.DragAction.MOVE)
+        source.connect(
+            "prepare",
+            lambda _source, _x, _y: Gdk.ContentProvider.new_for_value(
+                GObject.Value(GObject.TYPE_INT, index)
+            ),
+        )
+        source.connect(
+            "drag-begin",
+            lambda source, _drag: source.set_icon(Gtk.WidgetPaintable.new(row), 24, 24),
+        )
+        row.add_controller(source)
+        target = Gtk.DropTarget.new(GObject.TYPE_INT, Gdk.DragAction.MOVE)
+        target.connect(
+            "drop", lambda _target, moved, _x, _y: self._dropped(moved, index)
+        )
+        row.add_controller(target)
+        for icon, step, tooltip, possible in (
+            ("go-up-symbolic", -1, "Move to a lower bank", index > 0),
+            ("go-down-symbolic", 1, "Move to a higher bank", index < last),
+        ):
+            arrow = Gtk.Button(
+                icon_name=icon,
+                valign=Gtk.Align.CENTER,
+                has_frame=False,
+                tooltip_text=tooltip,
+                sensitive=possible,
+            )
+            arrow.connect(
+                "clicked", lambda _b, step=step: self.move_image(index, index + step)
+            )
+            row.add_suffix(arrow)
+            self.arrows[index, step] = arrow
+
+    def _dropped(self, moved: int, onto: int) -> bool:
+        # Moving rebuilds the page, and with it the row whose drop target is
+        # in the middle of delivering this signal. Let the drop finish first.
+        call_on_main_loop(self.move_image, moved, onto)
+        return True
 
     def _build_burn_page(self) -> Gtk.Widget:
         answers = self.answers

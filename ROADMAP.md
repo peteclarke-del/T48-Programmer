@@ -22,20 +22,27 @@
    write and verify an EEPROM, a UV EPROM and a 27C400, and record the firmware
    and the results. Correct whatever the real output shows that the captured
    text did not.
-2. **More boards.** Atari TT (four 8-bit chips on a 32-bit bus, which
+2. **Short minipro queries off the GTK thread.** Choosing a chip asks minipro
+   about it, and the first use of the chooser loads the catalogue, both from a
+   click handler. They take 40 to 200 ms, cannot raise into the handler, and
+   time out at 10 s, so today this is a pause and not a hang. Doing it
+   properly means making chip selection asynchronous throughout: the start
+   page, the options panel and the guide all read the chip's details as soon
+   as it is chosen.
+3. **More boards.** Atari TT (four 8-bit chips on a 32-bit bus, which
    `prepare()` already handles), the Acorn Atom, whose 24-pin socket pinout has
    to be confirmed against a board first, the BBC Master 128K MOS, and
    multi-Kickstart images for 27C800 and 27C160 switchers. Each needs its
    pinout confirmed against a board before it is offered.
-3. **TOS images that are already split.** The guide takes one whole image and
+4. **TOS images that are already split.** The guide takes one whole image and
    splits it. Taking a file per chip as well means deciding which file is HI,
    and a wrong guess burns a set that does not boot, so it needs a careful
    design and not a filename convention.
-4. **Compare two images.** Show the first difference and the count, for
+5. **Compare two images.** Show the first difference and the count, for
    deciding between two reads of a doubtful chip.
-5. **Read twice and compare**, as one command, for old EPROMs.
-6. **A hex view** of the open image.
-7. **Fuse editing** for microcontrollers. minipro exchanges fuses as a text
+6. **Read twice and compare**, as one command, for old EPROMs.
+7. **A hex view** of the open image.
+8. **Fuse editing** for microcontrollers. minipro exchanges fuses as a text
    file, which the application can already read and write. An editor with the
    fuse names is a better interface than a file chooser.
 

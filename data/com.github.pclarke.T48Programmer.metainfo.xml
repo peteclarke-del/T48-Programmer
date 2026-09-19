@@ -23,6 +23,14 @@
   </description>
   <content_rating type="oars-1.1" />
   <releases>
+    <release version="0.1.1" date="2026-09-19">
+      <description>
+        <ul>
+          <li>Offer programming, write and verify voltages and the pulse width with minipro 0.7.4, the release the package bundles. It names a chip's default voltages without listing the values it accepts, so Voltages and Timing never appeared and VPP could not be changed.</li>
+          <li>Show tidy stage names during a write with minipro 0.7.4.</li>
+        </ul>
+      </description>
+    </release>
     <release version="0.1.0" date="2026-09-18">
       <description>
         <ul>

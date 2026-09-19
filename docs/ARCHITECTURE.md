@@ -6,11 +6,18 @@ explains what it said. That division shapes the code.
 
 ## Principles
 
-**minipro is the authority.** The chip list, the size of each chip, and the
-voltages and clocks each one allows are all read from the installed minipro at
-run time. Nothing about a chip is stored in this application. A newer minipro
-brings its new chips with it, and a value minipro would refuse cannot be
-offered.
+**minipro is the authority.** The chip list, the size of each chip, and its
+default voltages are all read from the installed minipro at run time. Nothing
+about a chip is stored in this application, and a newer minipro brings its new
+chips with it.
+
+There is one exception, and it is about programmers and not chips. A newer
+minipro lists the voltages it will accept, and that list is what is offered.
+minipro 0.7.4, the release the package bundles, names a chip's default
+voltages and lists nothing. For that case `chips.py` carries the tables that
+0.7.4 checks `-o vpp`, `vdd` and `vcc` against, copied from its `main.c`, one
+for each programmer. Without them the bundled minipro would never show
+Voltages and Timing.
 
 **The contract with minipro lives in one module.** `minipro.py` is the only
 place that knows a flag. Everything else names an action and fills in an
@@ -99,6 +106,17 @@ starts again. A different machine keeps the image and asks for the chip again.
 A different chip keeps the images and drops only those that no longer fit.
 
 ## Details worth knowing
+
+**Two minipros, two dialects.** The application was first written against a
+build from minipro's repository and packaged with the 0.7.4 release, and the
+two do not print the same things. 0.7.4 has no header on a chip's details, says
+"Available on: TL866A/CS" whatever `-q` was given, gives a microcontroller's
+code in bytes where the newer build gives words, draws a write as "Writing
+Code" with two spaces while it runs, and ends a stage with "0.31Sec  OK". The
+parsers read both, the fixtures in `tests/support.py` hold text captured from
+each, and the simulator speaks 0.7.4, because that is what the package ships.
+When the pinned minipro changes, capture its output again before trusting any
+of this.
 
 **Progress arrives on carriage returns.** minipro redraws its progress line
 with `\r` and an erase-line escape, and ends it with a newline only when the

@@ -135,7 +135,8 @@ def _is_stage_name(text: str) -> bool:
 def parse_progress(line: str) -> Progress | None:
     """Read a stage or a percentage from one line, or None for anything else."""
     stage, mark, rest = line.partition(_STAGE_MARK)
-    rest = rest.strip()
+    # minipro 0.7.4 writes "Writing  Code", with two spaces, while it runs.
+    stage, rest = " ".join(stage.split()), rest.strip()
     if not (mark and stage):
         return None
     if rest.endswith("%") and rest[:-1].isdigit() and len(rest) <= 4:

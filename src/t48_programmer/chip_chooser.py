@@ -12,7 +12,7 @@ from gi.repository import Adw, Gtk  # noqa: E402
 
 from .chips import search  # noqa: E402
 
-# The T48 database holds some 28,000 names. A list that long is no use to read,
+# The T48 database holds some 27,000 names. A list that long is no use to read,
 # so the window shows the best matches and says how many there are in all.
 VISIBLE_LIMIT = 300
 

@@ -30,33 +30,20 @@ from pathlib import Path
 
 VERSION = "0.7.4"
 BANNER = "Found T48 00.1.31 (0x11f)"
-SEPARATOR = "-" * 40
 ERASED = 0xFF
 STEPS = 25
 
 UV_EPROM, EEPROM, FLASH, SPI_FLASH, LOGIC = "uv", "eeprom", "flash", "spi", "logic"
 
-T48_VOLTAGES = (
-    "Default VPP programming voltage: {vpp} V\n"
-    "Available VPP voltages [V]: 9, 9.5, 10, \n"
-    "11, 11.5, 12, 12.5, 13, 13.5, 14, 14.5, \n"
-    "15.5, 16, 16.5, 17, 18, 21, 25\n\n"
-    "Default VDD write voltage: 6.5 V\n"
-    "Available VDD write voltages [V]: 1.2, \n"
-    "1.8, 2.5, 3, 3.3, 4, 4.5, 4.75, 5, \n"
-    "5.25, 5.5, 5.75, 6, 6.25, 6.5\n\n"
-    "Default VCC verify voltage: 5 V\n"
-    "Available VCC verify voltages [V]: 1.2, \n"
-    "1.8, 2.5, 3, 3.3, 4, 4.5, 4.75, 5, \n"
-    "5.25, 5.5, 5.75, 6, 6.25, 6.5\n\n"
-    "Default write pulse: 100 us\n"
-    "Available write pulse[us]: 1-65535\n" + SEPARATOR + "\n"
-)
-SPI_CLOCKS = (
-    "Available SPI clock frequencies [MHz]: \n4, 8, 15, 30\n" + SEPARATOR + "\n"
-)
-LOGIC_VOLTAGES = (
-    "Default VCC voltage: 5 V\nAvailable VCC voltages [V]: 1.8, 2.5, \n3.3, 5\n"
+# minipro 0.7.4 names a chip's default voltages and lists no others. It also
+# says "Available on: TL866A/CS" whatever -q was given, which is reproduced
+# here because it is what the parsers will meet.
+RELEASE_VOLTAGES = (
+    "*******************************\n"
+    "VPP programming voltage: {vpp}V\n"
+    "VDD write voltage: 6.5V\n"
+    "VCC verify voltage: 5V\n"
+    "Pulse delay: 100us\n"
 )
 
 
@@ -153,41 +140,48 @@ def load_chip(chip: Chip) -> bytearray:
     return bytearray([ERASED]) * chip.size
 
 
-def stage(label: str, percentages: bool = True) -> None:
-    """Draw one progress stage the way minipro's progress_status() does."""
+def stage(label: str, percentages: bool = True, running_label: str = "") -> None:
+    """Draw one progress stage the way minipro 0.7.4 does.
+
+    The release draws a write as "Writing  Code", with two spaces, while it
+    runs, and with one when it is done. running_label reproduces that.
+    """
     started = time.monotonic()
-    sys.stderr.write(f"\r\x1b[K{label}")
+    running = running_label or label
+    sys.stderr.write(f"\r\x1b[K{running}")
     sys.stderr.flush()
     if percentages:
         for step in range(STEPS + 1):
-            sys.stderr.write(f"\r\x1b[K{label}{step * 100 // STEPS:2d}%")
+            sys.stderr.write(f"\r\x1b[K{running}{step * 100 // STEPS:2d}%")
             sys.stderr.flush()
             time.sleep(delay())
     elapsed = time.monotonic() - started
-    sys.stderr.write(f"\r\x1b[K{label}{elapsed:.2f} Sec  OK\n")
+    sys.stderr.write(f"\r\x1b[K{label}{elapsed:.2f}Sec  OK\n")
     sys.stderr.flush()
 
 
 def chip_info(chip: Chip) -> str:
-    lines = ["", "---------------Chip Info----------------", f"Name: {chip.name}"]
+    lines = [f"Name: {chip.name}"]
     if chip.kind == LOGIC:
-        lines += [f"Package:\t {chip.package}", "Vector count:\t 4", SEPARATOR]
-        return "\n".join(lines) + "\n" + LOGIC_VOLTAGES
+        lines += [
+            f"Package:\t {chip.package}",
+            "VCC voltage:\t 5V",
+            "Vector count:\t 4",
+        ]
+        return "\n".join(lines) + "\n"
     memory = f"{chip.size // 2} Words" if chip.word_wide else f"{chip.size} Bytes"
     lines += [
-        "Available on: T48, T56",
+        "Available on: TL866A/CS",
         f"Memory: {memory}",
         f"Package: {chip.package}",
+        "ICSP: -",
         "Protocol: 0x07",
         "Read buffer size: 1024 Bytes",
         "Write buffer size: 128 Bytes",
-        SEPARATOR,
     ]
     text = "\n".join(lines) + "\n"
     if chip.kind == UV_EPROM or chip.name.startswith("W27C"):
-        text += T48_VOLTAGES.format(vpp=chip.vpp)
-    if chip.kind == SPI_FLASH:
-        text += SPI_CLOCKS
+        text += RELEASE_VOLTAGES.format(vpp=chip.vpp)
     return text
 
 
@@ -284,7 +278,7 @@ def run_chip_action(arguments: argparse.Namespace, chip: Chip) -> int:
         if not arguments.skip_erase and chip.kind != EEPROM:
             stage("Erasing... ", percentages=False)
         written = image
-    stage("Writing Code...  ")
+    stage("Writing Code...  ", running_label="Writing  Code...  ")
     state_file(chip).write_bytes(written)
     if arguments.skip_verify:
         return 0

@@ -66,6 +66,62 @@ class ParseChipInfoTests(unittest.TestCase):
         self.assertEqual(info.package, "DIP14")
         self.assertEqual(info.settings["vcc"].choices, ("1.8", "2.5", "3.3", "5"))
 
+    def test_the_release_names_its_defaults_and_is_given_the_values_it_accepts(
+        self,
+    ) -> None:
+        # minipro 0.7.4 prints "VPP programming voltage: 13V" and no list. With
+        # nothing offered, Voltages and Timing would never appear for the
+        # minipro that the package bundles, and VPP could not be changed.
+        info = parse_chip_info(support.RELEASE_EPROM_INFO, "t48")
+
+        self.assertEqual(info.code_bytes, 32768)
+        self.assertEqual(info.settings["vpp"].default, "13")
+        self.assertEqual(info.settings["vpp"].choices, tuple(T48_VOLTAGES.split()))
+        self.assertEqual(info.settings["vdd"].default, "6.5")
+        self.assertEqual(
+            info.settings["vcc"].choices, ("3.3", "4", "4.5", "5", "5.5", "6.5")
+        )
+        self.assertEqual(info.pulse_default, "100")
+
+    def test_each_programmer_is_offered_only_what_it_can_supply(self) -> None:
+        tl866 = parse_chip_info(support.RELEASE_EPROM_INFO, "tl866ii")
+        older = parse_chip_info(support.RELEASE_EPROM_INFO, "tl866a")
+
+        self.assertNotIn("21", tl866.settings["vpp"].choices)
+        self.assertEqual(tl866.settings["vpp"].choices[-1], "18")
+        self.assertEqual(older.settings["vpp"].choices[0], "10")
+
+    def test_a_programmer_with_no_table_is_offered_nothing_it_might_refuse(
+        self,
+    ) -> None:
+        self.assertEqual(
+            parse_chip_info(support.RELEASE_EPROM_INFO, "t76").settings, {}
+        )
+
+    def test_a_list_printed_by_minipro_is_used_in_place_of_the_table(self) -> None:
+        newer = support.RELEASE_EPROM_INFO + "Available VPP voltages [V]: 12, 13\n"
+
+        self.assertEqual(
+            parse_chip_info(newer, "t48").settings["vpp"].choices, ("12", "13")
+        )
+
+    def test_the_release_describes_other_kinds_of_chip(self) -> None:
+        eeprom = parse_chip_info(support.RELEASE_EEPROM_INFO, "t48")
+        mcu = parse_chip_info(support.RELEASE_MICROCONTROLLER_INFO, "t48")
+        pld = parse_chip_info(support.RELEASE_PLD_INFO, "t48")
+        logic = parse_chip_info(support.RELEASE_LOGIC_INFO, "t48")
+
+        self.assertEqual((eeprom.code_bytes, eeprom.settings), (32768, {}))
+        self.assertTrue(eeprom.is_plain_memory)
+        # The release gives a microcontroller's code in bytes, not words.
+        self.assertEqual(mcu.memory, "32768 Bytes + 1024 Bytes")
+        self.assertFalse(mcu.is_plain_memory)
+        self.assertEqual(pld.settings["vpp"].default, "16")
+        self.assertEqual(set(pld.settings), {"vpp"})
+        self.assertTrue(logic.is_logic)
+        self.assertEqual(logic.settings["vcc"].default, "5")
+        self.assertEqual(logic.settings["vcc"].choices, ("5", "3.3", "2.5", "1.8"))
+
     def test_an_unknown_device_is_none(self) -> None:
         self.assertIsNone(parse_chip_info(support.UNKNOWN_DEVICE))
         self.assertIsNone(parse_chip_info(""))

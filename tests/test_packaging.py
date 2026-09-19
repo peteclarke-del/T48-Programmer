@@ -91,22 +91,29 @@ class IconTests(unittest.TestCase):
 
 
 class ScriptTests(unittest.TestCase):
-    def test_shell_scripts_parse(self) -> None:
+    def test_every_shell_script_is_syntax_checked_by_the_one_checker(self) -> None:
+        done = subprocess.run(
+            [str(PACKAGING / "check-scripts.sh")], capture_output=True, text=True
+        )
+        self.assertEqual(done.returncode, 0, done.stderr)
+        checked = {line.split()[-1] for line in done.stdout.splitlines()}
+
+        # Everything with a shell on its first line, so that a new script
+        # cannot be added and left unchecked.
         scripts = {
-            "bash": [ROOT / "t48-programmer", PACKAGING / "build-deb.sh"],
-            "sh": [
-                PACKAGING / "t48-programmer",
-                PACKAGING / "postinst",
-                PACKAGING / "postrm",
-            ],
-        }
-        for shell, paths in scripts.items():
-            for path in paths:
-                with self.subTest(path=path.name, shell=shell):
-                    completed = subprocess.run(
-                        [shell, "-n", str(path)], capture_output=True, text=True
-                    )
-                    self.assertEqual(completed.stderr, "")
+            str(path.relative_to(ROOT))
+            for path in [ROOT / "t48-programmer", *PACKAGING.iterdir()]
+            if path.is_file() and path.read_bytes()[:2] == b"#!"
+        } | {"packaging/package-target.sh"}
+        self.assertEqual(checked, scripts)
+
+    def test_the_checker_looks_at_every_script_and_not_only_the_first(self) -> None:
+        # "bash -n one two" checks only "one". CI was written that way once.
+        text = (PACKAGING / "check-scripts.sh").read_text()
+        self.assertNotRegex(text, r"(?m)^\s*(ba)?sh -n \S+ \S+")
+        for workflow in (ROOT / ".github/workflows").glob("*.yml"):
+            with self.subTest(workflow.name):
+                self.assertNotIn("sh -n", workflow.read_text())
 
     def test_the_udev_rules_grant_access_and_do_not_only_mark_the_device(self) -> None:
         # minipro 0.7.4 marks the device in one file and grants access in

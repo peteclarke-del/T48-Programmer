@@ -16,10 +16,14 @@ from .subprocess_runner import StreamingProcessResult, run_streaming_process
 # and a 16 MB SPI part at the slowest clock takes longer still.
 OPERATION_TIMEOUT = 45 * 60.0
 
-# "Reading Code...  37%" while a stage runs, then "Reading Code...  2.41 Sec  OK".
-_PROGRESS_PATTERN = re.compile(r"^(?P<stage>.+?)\.\.\.\s*(?P<percent>\d{1,3})%$")
-_STAGE_DONE_PATTERN = re.compile(r"^(?P<stage>.+?)\.\.\.\s*.*\bOK$")
-_STAGE_START_PATTERN = re.compile(r"^(?P<stage>[A-Z][A-Za-z ]+?)\.\.\.$")
+# minipro draws a stage as "Reading Code...  " while it starts, then as
+# "Reading Code...  37%" while it runs, then as "Reading Code...  2.41 Sec  OK".
+# The lines are taken apart with string methods and not regular expressions.
+# The obvious expressions, a lazy ".+?" before the dots, backtrack
+# quadratically, and one long line of dots from a misbehaving minipro would
+# stall the reader for seconds at a time.
+_STAGE_MARK = "..."
+_STAGE_DONE = "OK"
 _CHIP_ID_PATTERN = re.compile(r"Chip ID:\s*(?P<id>0x[0-9A-Fa-f]+)")
 
 # What minipro prints when something is wrong, and what that means to a person
@@ -123,15 +127,23 @@ class OperationResult:
     firmware_warning: str = ""
 
 
+def _is_stage_name(text: str) -> bool:
+    """True for "Reading Code" or "Erasing": a capital, then letters and spaces."""
+    return text[:1].isupper() and all(c.isalpha() or c == " " for c in text)
+
+
 def parse_progress(line: str) -> Progress | None:
     """Read a stage or a percentage from one line, or None for anything else."""
-    if match := _PROGRESS_PATTERN.match(line):
-        fraction = min(int(match["percent"]), 100) / 100
-        return Progress(match["stage"], fraction)
-    if match := _STAGE_DONE_PATTERN.match(line):
-        return Progress(match["stage"], 1.0)
-    if match := _STAGE_START_PATTERN.match(line):
-        return Progress(match["stage"])
+    stage, mark, rest = line.partition(_STAGE_MARK)
+    rest = rest.strip()
+    if not (mark and stage):
+        return None
+    if rest.endswith("%") and rest[:-1].isdigit() and len(rest) <= 4:
+        return Progress(stage, min(int(rest[:-1]), 100) / 100)
+    if rest.split()[-1:] == [_STAGE_DONE]:
+        return Progress(stage, 1.0)
+    if not rest and _is_stage_name(stage):
+        return Progress(stage)
     return None
 
 
@@ -141,7 +153,7 @@ def is_transient(line: str) -> bool:
     The opening of a stage and each percentage are redrawn in place, and the
     line that replaces them, with the time taken, is the one that is kept.
     """
-    return bool(_PROGRESS_PATTERN.match(line) or _STAGE_START_PATTERN.match(line))
+    return parse_progress(line) is not None and not line.endswith(_STAGE_DONE)
 
 
 def explain_failure(transcript: str, action_key: str = "") -> str:
@@ -177,11 +189,16 @@ def run_action(
     controller: OperationController | None = None,
     runner: Callable[..., StreamingProcessResult] = run_streaming_process,
 ) -> OperationResult:
-    """Run one action to completion. Call this from a worker thread."""
+    """Run one action to completion. Call this from a worker thread.
+
+    Always returns a result and never raises. The caller is a thread whose only
+    way of telling the window that the operation is over is that result, and an
+    exception lost in the thread would leave the window on its progress page
+    with every command refused until it was killed.
+    """
     base = minipro.base_command()
     if base is None:
         return OperationResult(action, False, MISSING_TOOL_SUMMARY, "")
-    command = minipro.build_command(base, action, chip, path, options)
     kept: list[str] = []
 
     def on_line(line: str) -> None:
@@ -192,12 +209,20 @@ def run_action(
             on_progress(progress)
 
     try:
+        command = minipro.build_command(base, action, chip, path, options)
         process = runner(
             command, timeout=OPERATION_TIMEOUT, on_line=on_line, controller=controller
         )
     except OSError as error:
         return OperationResult(
             action, False, f"minipro could not be started: {error}", ""
+        )
+    except Exception as error:  # noqa: BLE001 - see the docstring
+        return OperationResult(
+            action,
+            False,
+            f"{action.title} stopped unexpectedly: {error!r}",
+            "\n".join(kept),
         )
 
     transcript = "\n".join(kept)

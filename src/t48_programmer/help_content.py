@@ -117,7 +117,9 @@ HELP_TOPICS = (
                 "The sequence",
                 (
                     "minipro reads the chip ID, erases the chip if it can be erased electrically, writes the image, and reads it back to verify. Each stage appears on the progress page. A write that verifies has been read back from the chip byte for byte, so it is done.",
-                    "The image must be the same size as the chip. When it is not, the start page says so before you begin, and minipro stops rather than guess. For a ROM smaller than its chip, use the guided ROM burn so that it is repeated to fill the chip, or allow the mismatch under Options, Writing.",
+                    "The image must be the same size as the chip. When it is not, the start page says so before you begin, and minipro stops rather than guess.",
+                    "When the image is smaller than the chip and goes into it a whole number of times, Write asks how it should be written. Fill the Chip repeats the image to fill the chip, so that it is found whichever part of the chip the machine reads. Some machines need this: a BBC Micro holds the upper address pins of a socket high and so reads the top of a chip larger than 16 KB, where an image written once at the bottom is never seen. The filled image becomes the current image, so the start page describes what is in the chip and a later Verify compares all of it. Write Once puts the image at the bottom and leaves the rest of the chip as it is. The guided ROM burn fills without asking, because there the board is known.",
+                    "An image that does not divide into the chip, such as 96 KB in a 128 KB chip, is offered nothing, and minipro stops unless the mismatch is allowed under Options, Writing.",
                 ),
                 (
                     "Choose the chip, then open the image. Check the identification and the size line.",
@@ -176,6 +178,7 @@ HELP_TOPICS = (
                     "The MOS, BASIC and sideways ROMs are 8 KB or 16 KB each, and the machine pages them in 16 KB banks. The guide offers chips from 8 KB to 256 KB. A 27128 is the original fit. The 128 KB and 256 KB parts have 32 pins and need an adapter in a 28-pin socket.",
                     "One image in a larger chip is repeated into every bank. That works in any socket, because a plain socket holds the upper address pins high and so reads the top bank, where a copy is.",
                     "A chip larger than 16 KB can also hold a different ROM in each bank, the first image in the lowest. Those appear only where something drives the upper address pins: a switch, a ROM board, or a Master socket linked for 32 KB, which presents both banks as two ROM slots. The last page shows what each bank holds from the top of the chip down, and marks the one a plain socket reads. If that bank is empty, the ROM will not be seen in a plain socket.",
+                    "The order of the images is the order of the banks. Drag an image by its handle and drop it on another to move it there, or use the arrows at the end of its row to move it a bank at a time. The arrows keep the keyboard focus, so an image can be walked up or down the list with Space or Enter. Each row shows the bank it will occupy, which for an image of several banks is a range. How a bank relates to a ROM slot in the machine depends on how the adapter wires the upper address pins, so check the map on the last page against the adapter's documentation before burning.",
                     "A 128 KB Master MOS image is eight banks and fills a 128 KB chip. A sideways ROM is recognised by its header, and its own title is shown beside the file name, which is the easy way to tell sixteen files called rom apart.",
                 ),
             ),
@@ -221,6 +224,46 @@ HELP_TOPICS = (
                 "Programmer self test",
                 (
                     "Programmer, Self Test checks the pin drivers of the programmer itself. The socket must be empty, because the test drives every pin with every supply in turn, and a chip left in the socket may not survive it.",
+                ),
+            ),
+        ),
+    ),
+    HelpTopic(
+        "updates",
+        "Updating T48 Programmer",
+        "Check for a newer version from the Help menu and install it.",
+        (
+            HelpSection(
+                "Checking for a newer version",
+                (
+                    "Choose Help, Check for Application Updates. The About window opens and asks GitHub for the latest release, then compares it with the version shown above the button. The button in the About window does the same. The application checks only when you ask. Nothing is sent when it starts, and nothing else in the application uses the network.",
+                    "The answer shows under the button: that this is the newest version, or the newer version and the one you have. When GitHub cannot be reached or its answer cannot be read, it says Could not check for a newer version, with the reason, and never that this is the newest version.",
+                ),
+            ),
+            HelpSection(
+                "Installing it",
+                (),
+                (
+                    "Press Update to, followed by the new version number. A question says which package will be installed and shows the release notes.",
+                    "Press Download and Install. The package made for your system, such as Ubuntu 24.04 on amd64, is downloaded from GitHub and checked against the SHA256SUMS file published with it. A package that does not match is deleted and nothing is installed.",
+                    "The system asks for your password, and apt installs the package over the old one. ROM images and other files in your folders are not changed.",
+                    "Press Restart T48 Programmer to start the new version. If the About window was closed while the update ran, a question offers the restart.",
+                ),
+            ),
+            HelpSection(
+                "While it runs",
+                (
+                    "Closing the About window does not stop a download, and reopening it shows how far it has got. Cancel stops the download. Installing waits for as long as the password prompt is open. Once you answer it, apt runs to the end and cannot be cancelled.",
+                    "An update is not installed while a chip is being read, written, verified or erased, because the package replaces the minipro that the operation is using. The application does not restart during an operation either. Wait until the operation has finished, then press the button again.",
+                ),
+            ),
+            HelpSection(
+                "When it cannot install",
+                (
+                    "Dismissing the password prompt installs nothing and leaves the update offered.",
+                    "Without pkexec, or when the system does not allow the installation, the message gives a command to run in a terminal: sudo apt install followed by the downloaded package, which is kept in ~/.cache/t48-programmer/updates.",
+                    "A copy run from the source tree, or installed from the wheel, cannot update itself. The button then opens the release page. Update the source tree, or install the package from the release page.",
+                    "When the release has no package for your system, the message names the system and the button opens the release page, which lists the packages it has.",
                 ),
             ),
         ),

@@ -7,10 +7,13 @@
 - Image identification for Kickstart, TOS and Acorn ROMs.
 - A guided ROM burn with breadcrumbs for Amiga Kickstart, Atari TOS in six
   chips or two, and Acorn ROMs in chips from 8 KB to 256 KB.
-- Several Acorn ROMs in one chip, in 16 KB banks, with a bank map.
+- Several Acorn ROMs in one chip, in 16 KB banks, with a bank map, reordered by
+  dragging or with the keyboard.
 - Encrypted Amiga Forever Kickstarts, decrypted with rom.key.
 - Logic and RAM tests, chip ID, SPI flash detection, programmer self test.
 - Offline mode.
+- Check for Application Updates, with a release workflow that publishes the
+  package and its checksums.
 - A simulator, a user guide, and a Debian package that bundles minipro.
 
 ## Next
@@ -19,17 +22,22 @@
    write and verify an EEPROM, a UV EPROM and a 27C400, and record the firmware
    and the results. Correct whatever the real output shows that the captured
    text did not.
-2. **More boards.** Atari TT (four 8-bit chips on a 32-bit bus, which
+2. **Short minipro queries off the GTK thread.** Choosing a chip asks minipro
+   about it, and the first use of the chooser loads the catalogue, both from a
+   click handler. They take 40 to 200 ms, cannot raise into the handler, and
+   time out at 10 s, so today this is a pause and not a hang. Doing it
+   properly means making chip selection asynchronous throughout: the start
+   page, the options panel and the guide all read the chip's details as soon
+   as it is chosen.
+3. **More boards.** Atari TT (four 8-bit chips on a 32-bit bus, which
    `prepare()` already handles), the Acorn Atom, whose 24-pin socket pinout has
    to be confirmed against a board first, the BBC Master 128K MOS, and
    multi-Kickstart images for 27C800 and 27C160 switchers. Each needs its
    pinout confirmed against a board before it is offered.
-3. **TOS images that are already split.** The guide takes one whole image and
+4. **TOS images that are already split.** The guide takes one whole image and
    splits it. Taking a file per chip as well means deciding which file is HI,
    and a wrong guess burns a set that does not boot, so it needs a careful
    design and not a filename convention.
-4. **Reordering banks** by dragging, where today an image is removed and added
-   again.
 5. **Compare two images.** Show the first difference and the count, for
    deciding between two reads of a doubtful chip.
 6. **Read twice and compare**, as one command, for old EPROMs.
@@ -37,8 +45,6 @@
 8. **Fuse editing** for microcontrollers. minipro exchanges fuses as a text
    file, which the application can already read and write. An editor with the
    fuse names is a better interface than a file chooser.
-9. **Check for Application Updates**, as in Greaseweazle-GUI, once there are
-   releases to check for.
 
 ## Left out on purpose
 

@@ -7,6 +7,7 @@ use, so a newer minipro brings its new chips without a change here.
 from __future__ import annotations
 
 import re
+import subprocess
 from dataclasses import dataclass, field
 from functools import lru_cache
 
@@ -50,6 +51,8 @@ class ChipInfo:
     details: dict[str, str] = field(default_factory=dict)
     settings: dict[str, Setting] = field(default_factory=dict)
     pulse_default: str = ""
+    # Exactly what minipro printed, for Chip Information.
+    text: str = ""
 
     @property
     def memory(self) -> str:
@@ -71,6 +74,16 @@ class ChipInfo:
         if match is None:
             return 0
         return int(int(match.group("count")) * _UNIT_BYTES[match.group("unit")])
+
+    @property
+    def is_plain_memory(self) -> bool:
+        """True for an EPROM, EEPROM or flash chip, which is one block of memory.
+
+        minipro describes a microcontroller as code plus data, "16384 Words +
+        1024 Bytes". Repeating an image to fill the chip makes sense for a ROM
+        and none for firmware.
+        """
+        return bool(self.code_bytes) and "+" not in self.memory
 
     @property
     def is_logic(self) -> bool:
@@ -120,52 +133,99 @@ def parse_chip_info(output: str) -> ChipInfo | None:
         option: Setting(defaults.get(option, ""), tuple(values))
         for option, values in choices.items()
     }
-    return ChipInfo(details["Name"], details, settings, pulse_default)
+    return ChipInfo(details["Name"], details, settings, pulse_default, output.strip())
 
 
-@lru_cache(maxsize=8)
+# Answers from minipro, kept for the life of the process. Only answers are
+# kept. A failure is not remembered, so minipro installed or repaired while the
+# application is open is found the next time it is asked.
+_catalogues: dict[str, tuple[str, ...]] = {}
+_chip_infos: dict[tuple[str, str], ChipInfo] = {}
+
+
+def clear_cache() -> None:
+    _catalogues.clear()
+    _chip_infos.clear()
+    _upper_case.cache_clear()
+
+
+def _query(arguments: list[str]) -> minipro.QueryResult | None:
+    """A query whose failure to run at all is the same as no answer."""
+    try:
+        return minipro.run_query(arguments)
+    except (OSError, subprocess.TimeoutExpired):
+        return None
+
+
 def load_catalogue(programmer_key: str = minipro.DEFAULT_PROGRAMMER) -> tuple[str, ...]:
     """Every chip name minipro lists for a programmer, in database order.
 
-    The database is passed explicitly with -q. Without it, and with no
-    programmer attached, minipro stops to ask which database is meant.
+    Empty when minipro is absent or the listing failed. The database is passed
+    explicitly with -q. Without it, and with no programmer attached, minipro
+    stops to ask which database is meant.
     """
-    output = minipro.run_query(["-q", minipro.database_name(programmer_key), "-l"])
-    if output is None:
-        return ()
-    names = (line.strip() for line in output.splitlines())
-    return tuple(dict.fromkeys(name for name in names if name))
+    database = minipro.database_name(programmer_key)
+    if database not in _catalogues:
+        result = _query(["-q", database, "-l"])
+        if result is None or not result.succeeded:
+            return ()
+        names = (line.strip() for line in result.stdout.splitlines())
+        catalogue = tuple(dict.fromkeys(name for name in names if name))
+        if not catalogue:
+            return ()
+        _catalogues[database] = catalogue
+    return _catalogues[database]
 
 
-@lru_cache(maxsize=256)
 def chip_info(
     name: str, programmer_key: str = minipro.DEFAULT_PROGRAMMER
 ) -> ChipInfo | None:
     """Ask minipro about one chip. None when minipro is absent or disagrees."""
-    output = minipro.run_query(
-        ["-q", minipro.database_name(programmer_key), "-d", name]
-    )
-    return parse_chip_info(output) if output else None
+    key = (minipro.database_name(programmer_key), name)
+    if key not in _chip_infos:
+        result = _query(["-q", key[0], "-d", name])
+        info = parse_chip_info(result.text) if result and result.succeeded else None
+        if info is None:
+            return None
+        _chip_infos[key] = info
+    return _chip_infos[key]
 
 
-def search(catalogue: tuple[str, ...], text: str, limit: int = 500) -> list[str]:
-    """Chips whose name contains every word typed, in any order and case.
+@lru_cache(maxsize=8)
+def _upper_case(catalogue: tuple[str, ...]) -> tuple[str, ...]:
+    """The catalogue in capitals, made once and not on every keystroke."""
+    return tuple(name.upper() for name in catalogue)
 
-    An exact name comes first, then names that begin with the text, then the
-    rest, so typing "27C256" leads with the 27C256 parts and not with every
-    longer part number that happens to contain it.
+
+def search(catalogue: tuple[str, ...], text: str, limit: int) -> tuple[list[str], int]:
+    """The best matches for what was typed, and how many matches there are in all.
+
+    A chip matches when its name contains every word typed, in any order and
+    case. An exact name comes first, then names that begin with the text, then
+    the rest, so typing "27C256" leads with the 27C256 parts and not with every
+    longer part number that happens to contain it. One pass over the catalogue
+    sorts the matches into those three, which is all the ordering there is.
     """
     words = text.upper().split()
     if not words:
-        return list(catalogue[:limit])
+        return list(catalogue[:limit]), len(catalogue)
+    uppers = _upper_case(catalogue)
+    # Narrowed a word at a time. A comprehension per word is some fifteen times
+    # quicker here than asking all() of a generator for each of 28,000 names.
+    found = range(len(catalogue))
+    for word in words:
+        found = [index for index in found if word in uppers[index]]
     needle = text.strip().upper()
-
-    def rank(name: str) -> int:
-        upper = name.upper()
+    exact: list[str] = []
+    leading: list[str] = []
+    others: list[str] = []
+    for index in found:
+        upper = uppers[index]
         if upper == needle or upper.partition("@")[0] == needle:
-            return 0
-        return 1 if upper.startswith(needle) else 2
-
-    matches = [name for name in catalogue if all(w in name.upper() for w in words)]
-    matches.sort(key=rank)
-    return matches[:limit]
+            exact.append(catalogue[index])
+        elif upper.startswith(needle):
+            leading.append(catalogue[index])
+        else:
+            others.append(catalogue[index])
+    matches = exact + leading + others
+    return matches[:limit], len(matches)

@@ -34,6 +34,35 @@ _AVAILABLE_PATTERN = re.compile(
 )
 _PULSE_PATTERN = re.compile(r"^Default write pulse:\s*(?P<value>\d+)")
 
+# minipro 0.7.4, the release, prints a chip's voltages more briefly than the
+# builds that followed it: "VPP programming voltage: 13V", with no "Default"
+# before it and no list of the values it would accept after it. Both are read.
+_RELEASE_DEFAULT_PATTERN = re.compile(
+    r"^(?P<heading>VPP|VDD write|VCC verify|VCC)(?: programming)? voltage:"
+    r"\s*(?P<value>[\d.]+)\s*V$"
+)
+_RELEASE_PULSE_PATTERN = re.compile(r"^Pulse delay:\s*(?P<value>\d+)\s*us$")
+
+# The values minipro 0.7.4 accepts for each programmer, copied from the tables
+# in its main.c that it checks -o vpp, vdd and vcc against. They are used only
+# when minipro names a default and gives no list of its own, which is that
+# release. A newer minipro prints its lists, and what it prints is what is
+# offered. Were this table left out, the release that the package bundles would
+# never show Voltages and Timing, and VPP could not be changed at all.
+_SUPPLIES = ("3.3", "4", "4.5", "5", "5.5", "6.5")
+_VPP_TL866II = (
+    "9", "9.5", "10", "11", "11.5", "12", "12.5", "13",
+    "13.5", "14", "14.5", "15.5", "16", "16.5", "17", "18",
+)  # fmt: skip
+_VPP_TL866A = ("10", "12.5", "13.5", "14", "16", "17", "18", "21")
+_LOGIC_SUPPLIES = ("5", "3.3", "2.5", "1.8")
+RELEASE_VOLTAGES = {
+    "tl866a": {"vpp": _VPP_TL866A, "vdd": _SUPPLIES, "vcc": _SUPPLIES},
+    "tl866ii": {"vpp": _VPP_TL866II, "vdd": _SUPPLIES, "vcc": _SUPPLIES},
+    "t48": {"vpp": (*_VPP_TL866II, "21", "25"), "vdd": _SUPPLIES, "vcc": _SUPPLIES},
+}
+RELEASE_VOLTAGES["t56"] = RELEASE_VOLTAGES["t48"]
+
 
 @dataclass(frozen=True, slots=True)
 class Setting:
@@ -91,11 +120,15 @@ class ChipInfo:
         return "Vector count" in self.details
 
 
-def parse_chip_info(output: str) -> ChipInfo | None:
+def parse_chip_info(
+    output: str, programmer_key: str = minipro.DEFAULT_PROGRAMMER
+) -> ChipInfo | None:
     """Parse the block printed by ``minipro -d``, or None if there is none.
 
     minipro wraps its lists of voltages across several lines, so a line with no
-    heading of its own continues the list above it.
+    heading of its own continues the list above it. Where it names a default
+    and lists nothing, as the 0.7.4 release does, the values that release
+    accepts for this programmer are offered.
     """
     details: dict[str, str] = {}
     defaults: dict[str, str] = {}
@@ -105,17 +138,19 @@ def parse_chip_info(output: str) -> ChipInfo | None:
 
     for raw_line in output.splitlines():
         line = raw_line.strip()
-        if not line or set(line) == {"-"} or "Chip Info" in line:
+        if not line or set(line) <= {"-", "*"} or "Chip Info" in line:
             open_list = None
             continue
         if match := _AVAILABLE_PATTERN.match(line):
             open_list = choices.setdefault(_SETTING_HEADINGS[match["heading"]], [])
             line = match["rest"]
-        elif match := _DEFAULT_PATTERN.match(line):
+        elif match := _DEFAULT_PATTERN.match(line) or _RELEASE_DEFAULT_PATTERN.match(
+            line
+        ):
             defaults[_SETTING_HEADINGS[match["heading"]]] = match["value"]
             open_list = None
             continue
-        elif match := _PULSE_PATTERN.match(line):
+        elif match := _PULSE_PATTERN.match(line) or _RELEASE_PULSE_PATTERN.match(line):
             pulse_default = match["value"]
             open_list = None
             continue
@@ -129,6 +164,12 @@ def parse_chip_info(output: str) -> ChipInfo | None:
 
     if "Name" not in details:
         return None
+    accepted = RELEASE_VOLTAGES.get(programmer_key, {})
+    if "Vector count" in details:
+        accepted = {"vcc": _LOGIC_SUPPLIES}
+    for option in defaults:
+        if option not in choices and option in accepted:
+            choices[option] = list(accepted[option])
     settings = {
         option: Setting(defaults.get(option, ""), tuple(values))
         for option, values in choices.items()
@@ -184,7 +225,11 @@ def chip_info(
     key = (minipro.database_name(programmer_key), name)
     if key not in _chip_infos:
         result = _query(["-q", key[0], "-d", name])
-        info = parse_chip_info(result.text) if result and result.succeeded else None
+        info = (
+            parse_chip_info(result.text, programmer_key)
+            if result and result.succeeded
+            else None
+        )
         if info is None:
             return None
         _chip_infos[key] = info
@@ -211,7 +256,7 @@ def search(catalogue: tuple[str, ...], text: str, limit: int) -> tuple[list[str]
         return list(catalogue[:limit]), len(catalogue)
     uppers = _upper_case(catalogue)
     # Narrowed a word at a time. A comprehension per word is some fifteen times
-    # quicker here than asking all() of a generator for each of 28,000 names.
+    # quicker here than asking all() of a generator for each of 27,000 names.
     found = range(len(catalogue))
     for word in words:
         found = [index for index in found if word in uppers[index]]

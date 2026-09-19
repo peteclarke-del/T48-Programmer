@@ -85,6 +85,19 @@ class ParseProgressTests(unittest.TestCase):
         self.assertIsNone(parse_progress("... OK"))
         self.assertIsNone(parse_progress("Reading Code...  OKAY"))
 
+    def test_the_release_draws_its_stages_a_little_differently(self) -> None:
+        # No space before "Sec", and two spaces in the name while it runs.
+        self.assertEqual(
+            parse_progress("Reading Code...  2.41Sec  OK"),
+            Progress("Reading Code", 1.0),
+        )
+        self.assertEqual(
+            parse_progress("Erasing... 0.31Sec OK"), Progress("Erasing", 1.0)
+        )
+        self.assertEqual(
+            parse_progress("Writing  Code...  37%"), Progress("Writing Code", 0.37)
+        )
+
     def test_other_lines_are_not_progress(self) -> None:
         for line in (
             "Verification OK",

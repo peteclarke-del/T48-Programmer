@@ -38,8 +38,8 @@ sudo apt install build-essential pkg-config libusb-1.0-0-dev zlib1g-dev curl pyt
 python3 -m pip install build
 python3 -m build --wheel --outdir dist
 ./packaging/build-deb.sh dist
-dpkg-deb --info dist/T48-Programmer_0.1.0_ubuntu24.04_amd64.deb
-dpkg-deb --contents dist/T48-Programmer_0.1.0_ubuntu24.04_amd64.deb
+dpkg-deb --info dist/T48-Programmer_0.1.1_ubuntu24.04_amd64.deb
+dpkg-deb --contents dist/T48-Programmer_0.1.1_ubuntu24.04_amd64.deb
 cd dist
 sha256sum *.deb *.whl > SHA256SUMS
 ```
@@ -54,9 +54,22 @@ Merge the reviewed release pull request, then create and push a tag that exactly
 matches the version:
 
 ```sh
-git tag -s v0.1.0 -m "T48 Programmer v0.1.0"
-git push origin v0.1.0
+git tag -s v0.1.1 -m "T48 Programmer v0.1.1"
+git push origin v0.1.1
 ```
+
+`-s` signs the tag. git chooses the key by the tagger's email address, and
+fails with "No secret key" when the key belongs to another address, as the
+maintainer's does. This repository's own configuration names the key, which is
+a setting that is not pushed and has to be made once in each clone:
+
+```sh
+git config --local user.signingkey AD6F7C77170CB54A
+```
+
+GitHub shows a signed tag as verified only when the public key is registered
+on the account, under Settings, SSH and GPG keys. Until then it shows the tag
+as unverified, which does not affect the release.
 
 The release workflow verifies the version, runs the tests with and without the
 interface, builds the wheel and the `.deb`, installs the package on Ubuntu

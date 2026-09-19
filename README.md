@@ -16,7 +16,7 @@ The current application:
 - finds the programmer at startup and watches for it being unplugged or
   connected while the start page is showing;
 - offers every device in minipro's database for the connected programmer, some
-  28,000 names for the T48, through a search that accepts any part of the name;
+  27,600 names for the T48 in minipro 0.7.4, through a search that accepts any part of the name;
 - reads a chip to a raw binary, Intel HEX or Motorola S-record file;
 - writes an image with erase and verification, and asks first, naming the chip
   and the image;
@@ -57,8 +57,10 @@ The current application:
 
 ## Status
 
-Version 0.1.0 has been developed against minipro 0.7.4. Its parsers are tested
-against text captured from that release, and the whole chain from the window to
+It is developed against minipro 0.7.4, the release the package bundles, and
+against a newer build from minipro's repository. The two print a chip's details
+differently, and the parsers are tested against text captured from each. Beyond
+that, the whole chain from the window to
 the process is tested against a simulator that reproduces minipro's behaviour,
 including its carriage-return progress line and its exit statuses.
 
@@ -79,7 +81,7 @@ contains the application, minipro 0.7.4 built from source, its chip database,
 and the udev rules that let you use the programmer without root:
 
 ```sh
-sudo apt install ./T48-Programmer_0.1.0_ubuntu24.04_amd64.deb
+sudo apt install ./T48-Programmer_0.1.1_ubuntu24.04_amd64.deb
 ```
 
 To run from a checkout, install PyGObject, GTK 4 and libadwaita from your

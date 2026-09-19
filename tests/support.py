@@ -97,6 +97,67 @@ Available VCC voltages [V]: 1.8, 2.5,
 
 UNKNOWN_DEVICE = "\nDevice NOPE123 not found!\n"
 
+# The same questions put to minipro 0.7.4 as released, which is what the
+# package bundles. It prints no header, names each default voltage without the
+# word "Default", and lists no values that it would accept.
+RELEASE_EPROM_INFO = """\
+Name: M27C256B@DIP28
+Available on: TL866A/CS
+Memory: 32768 Bytes
+Package: DIP28
+ICSP: -
+Protocol: 0x07
+Read buffer size: 1024 Bytes
+Write buffer size: 128 Bytes
+*******************************
+VPP programming voltage: 13V
+VDD write voltage: 6.5V
+VCC verify voltage: 5V
+Pulse delay: 100us
+"""
+
+RELEASE_EEPROM_INFO = """\
+Name: AT28C256
+Available on: TL866A/CS
+Memory: 32768 Bytes
+Package: DIP28
+ICSP: -
+Protocol: 0x07
+Read buffer size: 512 Bytes
+Write buffer size: 128 Bytes
+"""
+
+RELEASE_MICROCONTROLLER_INFO = """\
+Name: ATMEGA328P@DIP28
+Available on: TL866A/CS
+Memory: 32768 Bytes + 1024 Bytes
+Package: DIP28
+ICSP: ICP007.JPG
+Protocol: 0x1d
+Read buffer size: 256 Bytes
+Write buffer size: 128 Bytes
+"""
+
+RELEASE_PLD_INFO = """\
+Name: GAL22V10D
+Available on: TL866A/CS
+Memory: 5892 Bits
+Package: DIP24
+ICSP: -
+Protocol: 0x2c
+Read buffer size: 0 Bytes
+Write buffer size: 0 Bytes
+*******************************
+VPP programming voltage: 16V
+"""
+
+RELEASE_LOGIC_INFO = """\
+Name: 7400
+Package:\t DIP14
+VCC voltage:\t 5V
+Vector count:\t 4
+"""
+
 
 @contextlib.contextmanager
 def simulator(delay: str = "0", absent: bool = False) -> Iterator[str]:

@@ -7,7 +7,7 @@ application, its user guide, minipro 0.7.4 compiled from source, minipro's chip
 database, and the udev rules for XGecu programmers. The distribution supplies
 Python, GTK 4, libadwaita, PyGObject and libusb.
 
-1. Download `T48-Programmer_0.1.0_ubuntu24.04_amd64.deb` and `SHA256SUMS` from the release
+1. Download `T48-Programmer_0.1.1_ubuntu24.04_amd64.deb` and `SHA256SUMS` from the release
    into the same folder.
 2. Verify the download:
 
@@ -18,7 +18,7 @@ Python, GTK 4, libadwaita, PyGObject and libusb.
 3. Install the package and its dependencies:
 
    ```sh
-   sudo apt install ./T48-Programmer_0.1.0_ubuntu24.04_amd64.deb
+   sudo apt install ./T48-Programmer_0.1.1_ubuntu24.04_amd64.deb
    ```
 
 4. Unplug the programmer and plug it in again. The package reloads the udev

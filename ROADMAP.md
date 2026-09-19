@@ -1,6 +1,6 @@
 # Roadmap
 
-## Done in 0.1.0
+## Done
 
 - Every minipro operation on a chip, with every option.
 - Chip search over the full database, and chip information.

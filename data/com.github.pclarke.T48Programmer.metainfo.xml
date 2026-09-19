@@ -29,6 +29,7 @@
           <li>Read, write, verify, blank check and erase any chip in the minipro database, with every minipro option available.</li>
           <li>Identify Kickstart, TOS and Acorn sideways ROM images, including a Kickstart checksum test.</li>
           <li>A guided ROM burn for Amiga Kickstart, Atari TOS and Acorn ROMs, with several Acorn ROMs to a chip and support for encrypted Amiga Forever Kickstarts.</li>
+          <li>Check for Application Updates, which downloads, verifies and installs the package for the installed system.</li>
           <li>Test logic ICs and static RAM, read chip IDs, detect SPI flash, and run the programmer self test.</li>
         </ul>
       </description>

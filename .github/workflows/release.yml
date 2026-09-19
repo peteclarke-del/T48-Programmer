@@ -1,0 +1,146 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    name: Test release source
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install metadata validators
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y appstream desktop-file-utils
+
+      - name: Install project
+        run: python -m pip install --no-deps --editable . ruff==0.16.4
+
+      - name: Check Python style
+        run: |
+          ruff check src tests tools
+          ruff format --check src tests tools
+
+      - name: Verify release tag
+        run: ./packaging/check-release-tag.sh "${GITHUB_REF_NAME}"
+
+      - name: Run test suite
+        run: python -W error::ResourceWarning -m unittest discover -s tests -v
+
+      - name: Install GTK and the display server
+        run: |
+          sudo apt-get install -y python3-gi gir1.2-gtk-4.0 gir1.2-adw-1 \
+            xvfb dbus-daemon
+
+      - name: Run tests with the interface
+        env:
+          PYTHONPATH: src
+          T48_PROGRAMMER_REQUIRE_GTK: "1"
+          GSK_RENDERER: cairo
+        run: >-
+          dbus-run-session -- xvfb-run --auto-servernum
+          /usr/bin/python3 -W error::ResourceWarning -m unittest discover -s tests -v
+
+      - name: Validate sources and metadata
+        run: |
+          python -m compileall -q src tests tools
+          packaging/check-scripts.sh
+          desktop-file-validate data/com.github.pclarke.T48Programmer.desktop
+          appstreamcli validate --no-net data/com.github.pclarke.T48Programmer.metainfo.xml
+
+  publish:
+    name: Build and publish installers
+    needs: test
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install build tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential pkg-config libusb-1.0-0-dev zlib1g-dev
+          python -m pip install build==1.2.2
+
+      - name: Build wheel and Ubuntu installer
+        run: |
+          python -m build --wheel --outdir dist
+          ./packaging/build-deb.sh dist
+
+      - name: Inspect installer
+        run: |
+          dpkg-deb --info dist/*.deb
+          dpkg-deb --contents dist/*.deb
+          package_root="$(mktemp -d)"
+          trap 'rm -rf -- "${package_root}"' EXIT
+          dpkg-deb --extract dist/*.deb "${package_root}"
+          if find "${package_root}/usr" -perm /022 -print -quit | grep -q .; then
+            echo "Package contains group-writable or world-writable files" >&2
+            exit 1
+          fi
+          udevadm verify "${package_root}/usr/lib/udev/rules.d/60-t48-programmer.rules"
+
+      - name: Install and verify package
+        run: |
+          sudo apt-get install -y ./dist/*.deb
+          test -x /usr/bin/t48-programmer
+          # The update installer runs as root, so nobody else may change it.
+          test "$(stat -c '%U %a' /usr/lib/t48-programmer/bin/install-update)" = "root 755"
+          # The bundled minipro must find the chip database it was built for.
+          /usr/lib/t48-programmer/bin/minipro --version 2>&1 \
+            | grep -F "/usr/lib/t48-programmer/share/minipro"
+          PYTHONPATH=/usr/lib/t48-programmer python3 -c "import t48_programmer"
+          # Check for Application Updates takes the file this package says it
+          # was built as from a newer release, so the record must name it.
+          PYTHONPATH=/usr/lib/t48-programmer python3 -c "
+          import sys
+          from t48_programmer import __version__, app_update
+          target = app_update.installed_target()
+          name = target.package_name(__version__) if target else None
+          if name != sys.argv[1]:
+              raise SystemExit(f'The package records {name}, not {sys.argv[1]}.')
+          print(f'The package records {target.system}: {name}')
+          " "$(basename dist/*.deb)"
+
+      - name: Create checksums
+        run: cd dist && sha256sum *.deb *.whl > SHA256SUMS
+
+      - name: Upload workflow artifact
+        uses: actions/upload-artifact@v7
+        with:
+          name: T48-Programmer-${{ github.ref_name }}
+          path: dist/
+          if-no-files-found: error
+
+      - name: Publish GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: >-
+          gh release create "${GITHUB_REF_NAME}" dist/*
+          --verify-tag
+          --generate-notes
+          --title "T48 Programmer ${GITHUB_REF_NAME} for Linux"

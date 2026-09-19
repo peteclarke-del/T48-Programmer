@@ -62,7 +62,12 @@ def base_command() -> list[str] | None:
         # Run by path, so the simulator starts whatever PYTHONPATH holds.
         return [sys.executable, str(Path(__file__).with_name("simulator.py"))]
     executable = os.environ.get(EXECUTABLE_VARIABLE) or shutil.which("minipro")
-    return [executable] if executable else None
+    # A name that is set but wrong is the same as no minipro, and is reported
+    # as that. Left unchecked it surfaces later as an exception from whichever
+    # button was pressed first.
+    if executable and os.access(executable, os.X_OK):
+        return [executable]
+    return None
 
 
 @dataclass(frozen=True, slots=True)
@@ -285,12 +290,34 @@ def build_command(
     return command
 
 
-def run_query(arguments: list[str], timeout: float = 20.0) -> str | None:
-    """Run a short minipro query and return its output, or None without minipro.
+@dataclass(frozen=True, slots=True)
+class QueryResult:
+    """What a short minipro query printed, with the streams kept apart.
 
-    minipro prints listings on stdout and everything else on stderr, so the two
-    are joined. Standard input is closed because minipro asks which database to
-    list when no programmer is attached and -q was not given.
+    minipro prints listings on stdout and everything else, errors included, on
+    stderr. A caller that wants a listing must not be handed the two mixed, or
+    "infoic.xml: No such file or directory" becomes the name of a chip.
+    """
+
+    returncode: int
+    stdout: str
+    stderr: str
+
+    @property
+    def succeeded(self) -> bool:
+        return self.returncode == 0
+
+    @property
+    def text(self) -> str:
+        return "\n".join(part for part in (self.stdout, self.stderr) if part)
+
+
+def run_query(arguments: list[str], timeout: float = 10.0) -> QueryResult | None:
+    """Run a short minipro query, or return None when there is no minipro.
+
+    Raises OSError when minipro cannot be started and subprocess.TimeoutExpired
+    when it does not answer. Standard input is closed because minipro asks
+    which database to list when no programmer is attached and -q was not given.
     """
     base = base_command()
     if base is None:
@@ -304,7 +331,7 @@ def run_query(arguments: list[str], timeout: float = 20.0) -> str | None:
         errors="replace",
         timeout=timeout,
     )
-    return "\n".join(part for part in (completed.stdout, completed.stderr) if part)
+    return QueryResult(completed.returncode, completed.stdout, completed.stderr)
 
 
 def database_name(programmer_key: str) -> str:

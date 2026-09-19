@@ -45,6 +45,8 @@ Without GTK:
 | `help_content.py` | The user guide, as data |
 | `samples.py` | Synthetic ROM images with valid headers, for tests and screenshots |
 | `simulator.py` | A stand-in for minipro, run as a script |
+| `app_update.py` | The update itself: which release is newer, which package suits this system, the checksum, and the install command |
+| `releases.py` | Reading the latest GitHub release and downloading its files |
 | `gtk_environment.py` | Removes GTK paths inherited from a Snap-packaged terminal |
 
 With GTK:
@@ -57,6 +59,8 @@ With GTK:
 | `chip_chooser.py` | The chip search window |
 | `rom_wizard.py` | The guided ROM burn: breadcrumbs, five steps, and the burn sequence |
 | `help_view.py` | Renders `help_content` |
+| `app_updater.py` | The update's state and its controls in the About window |
+| `main_loop.py` | The one way a worker thread hands a result to GTK |
 
 ## How an operation runs
 
@@ -130,6 +134,20 @@ has a Kickstart header and its checksum adds up.
 out which image went where. It cuts the finished chip into banks and identifies
 each one, so what it shows is what will be burned.
 
+**A failure is not an answer, and is not cached.** The chip list and each
+chip's details are kept for the life of the process, but only when minipro gave
+them. If minipro is installed or repaired while the application is open, the
+next request finds it.
+
+**An update is verified by the side that installs it.** See SECURITY.md. The
+application's own check of the download is a courtesy that fails early. The
+check that protects the machine is the one `packaging/install-update` makes as
+root, on a copy that only root can touch.
+
+**Shell scripts are checked one at a time.** `bash -n one two` checks only
+`one`. `packaging/check-scripts.sh` holds the list and is what CI, the release
+workflow and the tests all run.
+
 **One udev rules file.** minipro 0.7.4 marks the device in one rules file and
 grants access in another. The package ships a single file that does both, under
 its own name, so that it cannot clash with a distribution's minipro package or
@@ -145,5 +163,4 @@ install the mark without the permission.
 | `T48_PROGRAMMER_SIMULATOR_DELAY` | Seconds per progress step |
 | `T48_PROGRAMMER_SIMULATOR_ABSENT=1` | Simulate an unplugged programmer |
 | `T48_PROGRAMMER_REQUIRE_GTK=1` | Fail the interface tests if GTK is missing, instead of skipping them |
-| `T48_PROGRAMMER_DOCUMENTATION_STATE` | Open in a fixed state, for screenshots |
 | `MINIPRO_HOME` | Read by minipro itself: the folder holding its chip database |

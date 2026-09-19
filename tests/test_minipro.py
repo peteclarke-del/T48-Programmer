@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import os
 import sys
+import tempfile
 import unittest
 from dataclasses import fields
 from pathlib import Path
@@ -15,12 +16,19 @@ IMAGE = Path("/roms/My Kickstart (3.1).rom")
 
 
 class BaseCommandTests(unittest.TestCase):
+    def setUp(self) -> None:
+        folder = tempfile.TemporaryDirectory(prefix="t48-minipro-")
+        self.addCleanup(folder.cleanup)
+        self.executable = Path(folder.name) / "minipro"
+        self.executable.write_text("#!/bin/sh\n")
+        self.executable.chmod(0o755)
+
     def test_uses_minipro_from_path(self) -> None:
         with (
             mock.patch.dict(os.environ, {}, clear=True),
-            mock.patch("shutil.which", return_value="/usr/bin/minipro"),
+            mock.patch("shutil.which", return_value=str(self.executable)),
         ):
-            self.assertEqual(minipro.base_command(), ["/usr/bin/minipro"])
+            self.assertEqual(minipro.base_command(), [str(self.executable)])
 
     def test_is_none_when_minipro_is_not_installed(self) -> None:
         with (
@@ -30,9 +38,24 @@ class BaseCommandTests(unittest.TestCase):
             self.assertIsNone(minipro.base_command())
 
     def test_a_named_executable_takes_precedence(self) -> None:
-        environment = {minipro.EXECUTABLE_VARIABLE: "/opt/minipro/minipro"}
-        with mock.patch.dict(os.environ, environment, clear=True):
-            self.assertEqual(minipro.base_command(), ["/opt/minipro/minipro"])
+        environment = {minipro.EXECUTABLE_VARIABLE: str(self.executable)}
+        with (
+            mock.patch.dict(os.environ, environment, clear=True),
+            mock.patch("shutil.which", return_value="/usr/bin/minipro"),
+        ):
+            self.assertEqual(minipro.base_command(), [str(self.executable)])
+
+    def test_a_named_executable_that_cannot_be_run_counts_as_no_minipro(self) -> None:
+        # Otherwise it surfaces as an exception from the first button pressed.
+        self.executable.chmod(0o644)
+        for named in (str(self.executable), "/nonexistent/minipro"):
+            with (
+                self.subTest(named),
+                mock.patch.dict(
+                    os.environ, {minipro.EXECUTABLE_VARIABLE: named}, clear=True
+                ),
+            ):
+                self.assertIsNone(minipro.base_command())
 
     def test_demo_mode_runs_the_bundled_simulator_by_path(self) -> None:
         with mock.patch.dict(os.environ, {minipro.DEMO_VARIABLE: "1"}, clear=True):
@@ -159,7 +182,7 @@ class RunQueryTests(unittest.TestCase):
         with mock.patch.object(minipro, "base_command", return_value=None):
             self.assertIsNone(minipro.run_query(["-k"]))
 
-    def test_joins_both_streams_and_closes_standard_input(self) -> None:
+    def test_keeps_the_streams_apart_and_closes_standard_input(self) -> None:
         import subprocess
 
         completed = subprocess.CompletedProcess([], 0, "AT28C256\n", "1 device\n")
@@ -167,11 +190,14 @@ class RunQueryTests(unittest.TestCase):
             mock.patch.object(minipro, "base_command", return_value=["minipro"]),
             mock.patch("subprocess.run", return_value=completed) as run,
         ):
-            output = minipro.run_query(["-q", "T48", "-l"])
+            result = minipro.run_query(["-q", "T48", "-l"])
 
-        self.assertEqual(output, "AT28C256\n\n1 device\n")
+        self.assertEqual(result, minipro.QueryResult(0, "AT28C256\n", "1 device\n"))
+        self.assertTrue(result.succeeded)
+        self.assertEqual(result.text, "AT28C256\n\n1 device\n")
         self.assertEqual(run.call_args.args[0], ["minipro", "-q", "T48", "-l"])
         self.assertEqual(run.call_args.kwargs["stdin"], subprocess.DEVNULL)
+        self.assertIn("timeout", run.call_args.kwargs)
 
     def test_database_name_falls_back_to_the_t48(self) -> None:
         self.assertEqual(minipro.database_name("tl866ii"), "TL866II")

@@ -54,16 +54,16 @@ def parse_presence_output(output: str) -> ProgrammerProbeResult:
 def detect_programmer(timeout: float = 8.0) -> ProgrammerProbeResult:
     """Locate minipro and ask it which programmer is attached."""
     try:
-        output = minipro.run_query(["-k"], timeout=timeout)
+        result = minipro.run_query(["-k"], timeout=timeout)
     except subprocess.TimeoutExpired:
         return ProgrammerProbeResult(False, "The programmer did not respond in time.")
     except OSError as error:
         return ProgrammerProbeResult(
             False, f"minipro could not be started: {error}", tool_available=False
         )
-    if output is None:
+    if result is None:
         return ProgrammerProbeResult(False, MISSING_TOOL_SUMMARY, tool_available=False)
-    return parse_presence_output(output)
+    return parse_presence_output(result.text)
 
 
 def parse_firmware(output: str) -> str:
@@ -87,10 +87,10 @@ def firmware_warning(output: str) -> str:
 def tool_version() -> str:
     """The installed minipro version, or an empty string when unknown."""
     try:
-        output = minipro.run_query(["--version"])
+        result = minipro.run_query(["--version"])
     except (OSError, subprocess.TimeoutExpired):
         return ""
-    for line in (output or "").splitlines():
+    for line in (result.text if result else "").splitlines():
         match = _VERSION_PATTERN.match(line.strip())
         if match:
             return match.group("version")

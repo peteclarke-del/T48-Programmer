@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 import tempfile
 import unittest
 from pathlib import Path
@@ -7,9 +8,12 @@ from pathlib import Path
 from t48_programmer import samples
 from t48_programmer.rom_image import (
     KIB,
+    MAX_KEY_BYTES,
+    MAX_KICKSTART_BYTES,
     ImageIdentity,
     RomKeyError,
     RomKeyMissing,
+    copies_to_fill,
     decrypt_kickstart,
     find_key,
     fingerprint,
@@ -17,6 +21,7 @@ from t48_programmer.rom_image import (
     identify,
     kickstart_checksum_valid,
     open_rom,
+    read_at_most,
     size_text,
     swap_byte_pairs,
 )
@@ -136,6 +141,49 @@ class EncryptedKickstartTests(unittest.TestCase):
 
         self.assertTrue(open_rom(self.rom, elsewhere / "my.key").decrypted)
 
+    def test_something_that_is_not_a_file_is_refused_and_not_read_for_ever(
+        self,
+    ) -> None:
+        # A FIFO reports a size of nothing and then never stops giving bytes.
+        pipe = self.folder / "endless.rom"
+        os.mkfifo(pipe)
+
+        with self.assertRaisesRegex(OSError, "not a regular file"):
+            open_rom(pipe)
+        with self.assertRaises(OSError):
+            read_at_most(self.folder, 10)
+
+    def test_a_fifo_or_a_folder_called_rom_key_is_not_taken_for_the_key(self) -> None:
+        os.mkfifo(self.folder / "rom.key")
+
+        self.assertIsNone(find_key(self.rom))
+        with self.assertRaises(RomKeyMissing):
+            open_rom(self.rom)
+
+    def test_a_key_too_large_to_be_one_is_not_read_into_memory(self) -> None:
+        huge = self.folder / "huge.key"
+        huge.write_bytes(bytes(MAX_KEY_BYTES + 1))
+
+        with self.assertRaisesRegex(RomKeyError, "too large to be a key"):
+            open_rom(self.rom, huge)
+
+    def test_reading_stops_at_the_limit_whatever_the_size_was_said_to_be(self) -> None:
+        path = self.folder / "big.bin"
+        path.write_bytes(bytes(1000))
+
+        self.assertEqual(read_at_most(path, 1000), bytes(1000))
+        self.assertIsNone(read_at_most(path, 999))
+
+    def test_a_large_file_that_merely_begins_like_a_kickstart_is_not_checksummed(
+        self,
+    ) -> None:
+        # Summing 64 MB as a Kickstart took 700 MB and three seconds.
+        lookalike = samples.kickstart()[:4] + bytes(MAX_KICKSTART_BYTES)
+
+        self.assertEqual(identify(lookalike).kind, "binary")
+        with self.assertRaisesRegex(RomKeyError, "too large"):
+            decrypt_kickstart(b"AMIROMTYPE1" + lookalike, KEY)
+
     def test_a_plain_rom_is_opened_as_it_is(self) -> None:
         plain = self.folder / "tos206.img"
         plain.write_bytes(samples.tos())
@@ -222,6 +270,39 @@ class OtherFormatTests(unittest.TestCase):
                 ("SHA-1", "f7c3bc1d808e04732adf679965ccc34ca7ae3441"),
             ),
         )
+
+
+class CopiesToFillTests(unittest.TestCase):
+    BINARY = ImageIdentity("binary", "Binary image")
+
+    def test_an_image_that_divides_into_the_chip_gives_the_number_of_copies(
+        self,
+    ) -> None:
+        self.assertEqual(copies_to_fill(16 * KIB, 32 * KIB, self.BINARY), 2)
+        self.assertEqual(copies_to_fill(8 * KIB, 64 * KIB, self.BINARY), 8)
+        self.assertEqual(copies_to_fill(256 * KIB, 512 * KIB, self.BINARY), 2)
+
+    def test_nothing_is_offered_where_filling_makes_no_sense(self) -> None:
+        cases = {
+            "the image fills the chip": (32 * KIB, 32 * KIB, self.BINARY),
+            "the image is larger than the chip": (64 * KIB, 32 * KIB, self.BINARY),
+            "the image does not divide into the chip": (
+                24 * KIB,
+                32 * KIB,
+                self.BINARY,
+            ),
+            "96 KB of TOS in a 128 KB chip": (96 * KIB, 128 * KIB, self.BINARY),
+            "the chip's size is not known": (16 * KIB, 0, self.BINARY),
+            "the image is empty": (0, 32 * KIB, self.BINARY),
+            "a HEX file, whose length is not its data's": (
+                16 * KIB,
+                32 * KIB,
+                ImageIdentity("ihex", "Intel HEX file"),
+            ),
+        }
+        for reason, arguments in cases.items():
+            with self.subTest(reason):
+                self.assertEqual(copies_to_fill(*arguments), 0)
 
 
 class FitTextTests(unittest.TestCase):

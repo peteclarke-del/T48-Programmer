@@ -18,6 +18,12 @@ KIB = 1024
 # Larger files are passed to minipro untouched but are not read into memory to
 # be identified. No ROM this application knows about comes near this size.
 MAX_INSPECTED_BYTES = 64 * KIB * KIB
+# A Kickstart is 256 KB or 512 KB, and 1 MB with an extended ROM joined to it.
+# Nothing larger is one, and the checksum is not worth running on a 64 MB file
+# that happens to begin with the same four bytes.
+MAX_KICKSTART_BYTES = 2 * KIB * KIB
+# Amiga Forever keys are about 2 KB.
+MAX_KEY_BYTES = 64 * KIB
 
 _KICKSTART_RELEASES = {
     30: "1.0",
@@ -152,6 +158,8 @@ def decrypt_kickstart(data: bytes, key: bytes) -> bytes:
     """
     if not key:
         raise RomKeyError("The key file is empty.")
+    if len(data) > MAX_KICKSTART_BYTES + len(_CLOANTO_MAGIC):
+        raise RomKeyError("The file is too large to be an encrypted Kickstart.")
     plain = xor_with_key(data[len(_CLOANTO_MAGIC) :], key)
     if plain[:4] not in _KICKSTART_MAGICS or not kickstart_checksum_valid(plain):
         raise RomKeyError(
@@ -171,7 +179,7 @@ def _identify_kickstart(data: bytes) -> ImageIdentity | None:
                 "needs its rom.key. Burned as it stands, it will not boot.",
             ),
         )
-    if len(data) < 16:
+    if not 16 <= len(data) <= MAX_KICKSTART_BYTES:
         return None
     swapped = swap_byte_pairs(data[:4]) in _KICKSTART_MAGICS
     if swapped:
@@ -286,11 +294,16 @@ def identify(data: bytes) -> ImageIdentity:
     return ImageIdentity("binary", "Binary image")
 
 
+def crc32_text(data: bytes) -> str:
+    """The CRC-32 the way ROM listings print it."""
+    return f"{zlib.crc32(data):08X}"
+
+
 def fingerprint(data: bytes) -> tuple[tuple[str, str], ...]:
     """The size and checksums people compare against ROM listings."""
     return (
         ("Size", f"{size_text(len(data))} ({len(data):,} bytes)"),
-        ("CRC-32", f"{zlib.crc32(data):08X}"),
+        ("CRC-32", crc32_text(data)),
         ("SHA-1", hashlib.sha1(data, usedforsecurity=False).hexdigest()),
     )
 
@@ -298,6 +311,21 @@ def fingerprint(data: bytes) -> tuple[tuple[str, str], ...]:
 def is_text_format(identity: ImageIdentity) -> bool:
     """True for a file whose length says nothing about the data it carries."""
     return identity.kind in ("ihex", "srec")
+
+
+def copies_to_fill(image_bytes: int, chip_bytes: int, identity: ImageIdentity) -> int:
+    """How many times the image goes into the chip exactly, or 0 if it does not.
+
+    A ROM smaller than its chip often has to be repeated to fill it, because
+    the machine reads whichever part of the chip its spare address pins select.
+    A BBC Micro reads the top half of a 32 KB chip, so a 16 KB ROM written once
+    at the bottom is never seen. That only makes sense when the image divides
+    into the chip a whole number of times, and only for a raw image, since the
+    length of a HEX file says nothing about the data in it.
+    """
+    if is_text_format(identity) or not 0 < image_bytes < chip_bytes:
+        return 0
+    return chip_bytes // image_bytes if chip_bytes % image_bytes == 0 else 0
 
 
 def fit_text(image_bytes: int, chip_bytes: int, identity: ImageIdentity) -> str:
@@ -335,7 +363,29 @@ def find_key(rom_path: Path) -> Path | None:
         siblings = list(rom_path.parent.iterdir())
     except OSError:
         return None
-    return next((path for path in siblings if path.name.lower() == KEY_FILE_NAME), None)
+    return next(
+        (
+            path
+            for path in siblings
+            if path.name.lower() == KEY_FILE_NAME and path.is_file()
+        ),
+        None,
+    )
+
+
+def read_at_most(path: Path, limit: int) -> bytes | None:
+    """The contents of a regular file of up to ``limit`` bytes, else None.
+
+    The size is not taken from stat() and trusted. A FIFO or a device reports
+    a size of nothing and then never stops giving bytes, and a file can grow
+    between the stat and the read. Anything but a regular file is refused, and
+    the read itself stops one byte past the limit.
+    """
+    if not path.is_file():
+        raise OSError(f"{path.name} is not a regular file")
+    with path.open("rb") as handle:
+        data = handle.read(limit + 1)
+    return data if len(data) <= limit else None
 
 
 def open_rom(path: Path, key_path: Path | None = None) -> OpenedRom:
@@ -345,22 +395,34 @@ def open_rom(path: Path, key_path: Path | None = None) -> OpenedRom:
     RomKeyMissing when there is neither, RomKeyError when the key is wrong, and
     OSError when a file cannot be read.
     """
-    byte_count = path.stat().st_size
-    if byte_count > MAX_INSPECTED_BYTES:
-        return OpenedRom(path, byte_count, None, ImageIdentity("binary", "Image"))
-    data = path.read_bytes()
+    data = read_at_most(path, MAX_INSPECTED_BYTES)
+    if data is None:
+        return OpenedRom(
+            path, path.stat().st_size, None, ImageIdentity("binary", "Image")
+        )
     if not is_encrypted(data):
-        return OpenedRom(path, byte_count, data, identify(data))
+        return OpenedRom(path, len(data), data, identify(data))
     key_path = key_path or find_key(path)
     if key_path is None:
         raise RomKeyMissing(
             f"{path.name} is an encrypted Amiga Forever ROM, and there is no "
             f"{KEY_FILE_NAME} beside it."
         )
-    data = decrypt_kickstart(data, key_path.read_bytes())
+    key = read_at_most(key_path, MAX_KEY_BYTES)
+    if key is None:
+        raise RomKeyError(f"{key_path.name} is too large to be a key.")
+    data = decrypt_kickstart(data, key)
     identity = identify(data)
     identity = replace(
         identity,
         details=(*identity.details, ("Encryption", f"Decrypted with {key_path.name}")),
     )
     return OpenedRom(path, len(data), data, identity, decrypted=True)
+
+
+def describe(opened: OpenedRom) -> str:
+    """One line on what a file is: its identity, its size, and its CRC-32."""
+    facts = [opened.identity.label, size_text(opened.byte_count)]
+    if opened.data is not None:
+        facts.append(f"CRC-32 {crc32_text(opened.data)}")
+    return ", ".join(facts)

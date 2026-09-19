@@ -17,7 +17,7 @@ the result goes through prepare() like any other image.
 
 from __future__ import annotations
 
-from collections.abc import Sequence
+from collections.abc import Iterable, Sequence
 from dataclasses import dataclass
 
 from .rom_image import KIB, size_text, swap_byte_pairs
@@ -78,15 +78,18 @@ class RomLayout:
     bank_bytes: int = 0
     notes: tuple[str, ...] = ()
 
-    @property
-    def title(self) -> str:
-        return ", ".join(self.machines)
+    def bank_size(self, option: ChipOption) -> int:
+        """The size of one bank in this chip, or 0 on a board without banks.
+
+        A chip smaller than the machine's page, an 8 KB 2764 in a 16 KB socket,
+        is one bank of its own size.
+        """
+        return min(self.bank_bytes, option.chip_bytes)
 
     def bank_count(self, option: ChipOption) -> int:
         """How many separate images the chip can hold on this board."""
-        if not self.bank_bytes:
-            return 1
-        return max(1, option.chip_bytes // self.bank_bytes)
+        bank = self.bank_size(option)
+        return option.chip_bytes // bank if bank else 1
 
 
 @dataclass(frozen=True, slots=True)
@@ -279,6 +282,11 @@ LAYOUTS = (
 LAYOUTS_BY_KEY = {layout.key: layout for layout in LAYOUTS}
 
 
+def sizes_text(sizes: Iterable[int]) -> str:
+    """ "8 KB or 16 KB", for saying which sizes would have done."""
+    return " or ".join(size_text(size) for size in sorted(sizes))
+
+
 def split_lanes(data: bytes, lane_count: int, lane_bytes: int) -> list[bytes]:
     """Deal an image out to its lanes, lane_bytes at a time to each in turn."""
     stride = lane_count * lane_bytes
@@ -315,6 +323,24 @@ def fit_to_chip(data: bytes, chip_bytes: int, *, segmented: bool) -> list[bytes]
     return [data + ERASED_BYTE * (chip_bytes - len(data))]
 
 
+def bank_spans(
+    layout: RomLayout, option: ChipOption, image_sizes: Sequence[int]
+) -> list[tuple[int, int]]:
+    """The first bank and the number of banks each image takes, in order.
+
+    Most images take one bank. A 128 KB Master MOS takes eight, so the bank an
+    image lands in is not its place in the list. A board that does not page its
+    ROMs has no banks to count, and each image there is simply one.
+    """
+    bank = layout.bank_size(option)
+    spans, first = [], 0
+    for size in image_sizes:
+        count = max(1, -(-size // bank)) if bank else 1
+        spans.append((first, count))
+        first += count
+    return spans
+
+
 def join_banks(layout: RomLayout, option: ChipOption, images: Sequence[bytes]) -> bytes:
     """Line several images up on bank boundaries, the first at the bottom.
 
@@ -329,7 +355,7 @@ def join_banks(layout: RomLayout, option: ChipOption, images: Sequence[bytes]) -
         if len(images) > 1:
             raise RomSetError("This board takes one ROM image.")
         return images[0]
-    bank = min(layout.bank_bytes, option.chip_bytes)
+    bank = layout.bank_size(option)
     joined = bytearray()
     for number, image in enumerate(images, start=1):
         if not image or (len(image) % bank and bank % len(image)):
@@ -350,7 +376,7 @@ def prepare(layout: RomLayout, option: ChipOption, data: bytes) -> tuple[RomPart
     """Arrange an image for a board, giving the contents of every chip."""
     whole_banks = layout.bank_bytes and len(data) % layout.bank_bytes == 0
     if len(data) not in layout.image_sizes and not whole_banks:
-        expected = " or ".join(size_text(size) for size in layout.image_sizes)
+        expected = sizes_text(layout.image_sizes)
         raise RomSetError(
             f"This board takes an image of {expected}. "
             f"The file is {size_text(len(data))}."
@@ -365,19 +391,6 @@ def prepare(layout: RomLayout, option: ChipOption, data: bytes) -> tuple[RomPart
             label = f"{name} {index}" if len(chips) > 1 else name
             parts.append(RomPart(label, option.device, contents))
     return tuple(parts)
-
-
-def layouts_for(image_bytes: int, image_kind: str = "") -> tuple[RomLayout, ...]:
-    """The layouts that accept an image of this size, the likeliest first.
-
-    Size alone is ambiguous: 256 KB is both a Kickstart 1.3 and an STE TOS. The
-    boards for the kind of image that was recognised lead the list, and the
-    rest stay on it, because a MOS ROM or a patched image carries no header to
-    be recognised by.
-    """
-    fitting = [layout for layout in LAYOUTS if image_bytes in layout.image_sizes]
-    fitting.sort(key=lambda layout: layout.family != image_kind)
-    return tuple(fitting)
 
 
 def layouts_in(family: RomFamily) -> tuple[RomLayout, ...]:

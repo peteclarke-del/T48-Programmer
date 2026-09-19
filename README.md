@@ -48,6 +48,9 @@ The current application:
   the chip would be left half written;
 - explains minipro's failures in plain terms and keeps its exact output in a
   diagnostic log;
+- checks for a newer release when asked, from the Help menu, then downloads the
+  package for the same system, verifies it against the release's checksums,
+  installs it and offers a restart;
 - works offline, with a banner that says so, for everything that does not need
   the programmer, and comes back online when one is connected; and
 - includes a user guide, opened with F1.
@@ -76,7 +79,7 @@ contains the application, minipro 0.7.4 built from source, its chip database,
 and the udev rules that let you use the programmer without root:
 
 ```sh
-sudo apt install ./t48-programmer_0.1.0_amd64.deb
+sudo apt install ./T48-Programmer_0.1.0_ubuntu24.04_amd64.deb
 ```
 
 To run from a checkout, install PyGObject, GTK 4 and libadwaita from your
@@ -97,6 +100,15 @@ sudo apt install python3-gi gir1.2-gtk-4.0 gir1.2-adw-1
 3. Press **Write**, read the confirmation, and confirm.
 4. Wait for the result page. A write that verifies has been read back from the
    chip and compared byte for byte.
+
+When the image is smaller than the chip and goes into it a whole number of
+times, as a 16 KB BBC ROM goes twice into a 32 KB AT28C256, the confirmation
+offers **Fill the Chip** as well as **Write Once**. Filling repeats the image so
+that it is found whichever part of the chip the machine reads, which a BBC Micro
+needs, since it reads the top of a chip larger than 16 KB. The filled image
+becomes the current image, so a later **Verify** compares the whole chip.
+
+![The question asked when an image goes into the chip twice](docs/images/11-fill-the-chip.png)
 
 A UV EPROM cannot be erased by the programmer. Erase it under an ultraviolet
 lamp and run **Blank Check** before writing. Programming can only change a 1 to
@@ -147,7 +159,16 @@ covered yet.
 Acorn machines page their ROMs in 16 KB banks, so a 32 KB chip has room for
 two, a 64 KB chip for four, and a 256 KB chip for sixteen. One image alone is
 repeated into every bank and works in any socket. Add more and each takes the
-next bank up from the bottom of the chip.
+next bank up from the bottom of the chip. An SST39SF010A, for one, takes eight
+16 KB images.
+
+![Three images, each with a drag handle, its bank, and arrows](docs/images/10-guide-images.png)
+
+The order of the images is the order of the banks. Drag an image by its handle
+onto another to move it there, or use the arrows on its row, which keep the
+keyboard focus so that an image can be walked up or down with Space. Each row
+shows the bank it will occupy, which is a range for an image that takes several,
+such as a 128 KB Master MOS.
 
 A plain BBC Micro socket holds the upper address pins high, so it reads the top
 bank and nothing else. Different ROMs in one chip appear only where something
@@ -186,6 +207,21 @@ machine and burned on another.
 The application looks for the programmer every few seconds while the start page
 is showing, and **Reconnect** looks at once. When one answers, the banner goes
 and the commands return with the chip and image still selected.
+
+## Updating
+
+![The About window offering a newer version](docs/images/09-update.png)
+
+**Help, Check for Application Updates** asks GitHub for the latest release and
+shows the answer in the About window. **Update to** downloads the package made
+for the same system as the installed one, checks it against the release's
+`SHA256SUMS`, installs it after the system asks for your password, and offers
+a restart. The package is checked a second time by the root-side installer, on
+a copy only root can touch, so it cannot be swapped while the prompt is open. It checks only when asked, and nothing else in
+the application uses the network. An update is never installed while a chip is
+being read or written, because the package replaces the minipro that the
+operation is using. A copy run from a checkout cannot update itself and is sent
+to the release page.
 
 ## Trying it without a programmer
 
